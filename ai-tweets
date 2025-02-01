@@ -1,0 +1,23 @@
+#!/usr/bin/env zsh
+
+for i in `seq 100000`
+do
+    shellm --model granite3.1-dense --wrap 0 << EOF
+Write 10 tweets about artificial intelligence and computer science.  Write them one per line, numbered.
+
+Example output:
+
+Here are the tweets
+
+1.  Tweet one.
+2.  Tweet two.
+3.  Tweet three.
+4.  Tweet four.
+5.  Tweet five.
+6.  Tweet six.
+7.  Tweet seven.
+8.  Tweet eight.
+9.  Tweet nine.
+10.  Tweet ten.
+EOF
+done

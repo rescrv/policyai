@@ -1,0 +1,7 @@
+type policyai::EmailPolicy {
+    unread: bool = true,
+    priority: ["low", "medium", "high"] @ highest wins,
+    category: ["ai", "distributed systems", "other"] @ agreement = "other",
+    template: string @ agreement,
+    labels: [string],
+}
