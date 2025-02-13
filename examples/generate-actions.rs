@@ -1,15 +1,14 @@
-use std::fs::OpenOptions;
-use std::io::{BufRead, BufReader, Read};
+use std::io::Read;
 
 use guacamole::combinators::*;
 use guacamole::Guacamole;
 
 use policyai::data::InjectableAction;
-use policyai::{Field, Policy, PolicyType};
+use policyai::{Field, PolicyType};
 
 fn generate_case(
     guac: &mut Guacamole,
-    policy_type: &PolicyType,
+    _policy_type: &PolicyType,
     index: usize,
     field: &Field,
 ) -> serde_json::Value {
@@ -21,12 +20,12 @@ fn generate_case(
         } => {
             let (semantic_injection, truth) = if coin()(guac) {
                 (
-                    format!("Set {:?} to true.", name),
+                    format!("When this rule matches, output {{{:?}: true}}.", name),
                     true,
                 )
             } else {
                 (
-                    format!("Set {:?} to false.", name),
+                    format!("When this rule matches, output {{{:?}: false}}.", name),
                     false,
                 )
             };
@@ -42,7 +41,7 @@ fn generate_case(
             default: _,
         } => {
             let semantic_injection =
-                format!("Set {:?} to {}.", name, index);
+                format!("When this rule matches, output {{{:?}: {}}}.", name, index);
             serde_json::to_value(InjectableAction {
                 inject: semantic_injection,
                 action: serde_json::json! {{ name : index }},
@@ -54,8 +53,10 @@ fn generate_case(
             on_conflict: _,
             default: _,
         } => {
-            let semantic_injection =
-                format!("Set {:?} to \"{}\".", name, index);
+            let semantic_injection = format!(
+                "When this rule matches, output {{{:?}: \"{}\"}}.",
+                name, index
+            );
             serde_json::to_value(InjectableAction {
                 inject: semantic_injection,
                 action: serde_json::json! {{ name : index.to_string() }},
@@ -63,7 +64,10 @@ fn generate_case(
             .unwrap()
         }
         Field::StringArray { name } => {
-            let semantic_injection = format!("Append \"{}\" to array {:?}.", index, name);
+            let semantic_injection = format!(
+                "When this rule matches, output {{{:?}: [\"{}\"]}}.",
+                name, index
+            );
             serde_json::to_value(InjectableAction {
                 inject: semantic_injection,
                 action: serde_json::json! {{ name : vec![index.to_string()] }},
@@ -77,7 +81,10 @@ fn generate_case(
             default: _,
         } => {
             let value = select(range_to(values.len()), values)(guac);
-            let semantic_injection = format!("Set {:?} to {:?}.", name, value);
+            let semantic_injection = format!(
+                "When this rule matches, output {{{:?}: {:?}}}.",
+                name, value
+            );
             serde_json::to_value(InjectableAction {
                 inject: semantic_injection,
                 action: serde_json::json! {{ name : value }},
@@ -95,7 +102,16 @@ fn main() {
         .expect("could not read policy type on stdin");
     let buf = String::from_utf8(buf).expect("policy type should be UTF8");
     let policy_type = PolicyType::parse(&buf).expect("policy type should be valid");
-    for line_number in 0..1_000 {
+    let mut line_number = 0;
+    let mut cases = 0;
+    while cases < 1_000 {
+        line_number += 1;
+        if !matches!(
+            policy_type.fields[line_number % policy_type.fields.len()],
+            Field::Bool { .. }
+        ) {
+            continue;
+        }
         println!(
             "{}",
             serde_json::to_string(&generate_case(
@@ -106,5 +122,6 @@ fn main() {
             ))
             .unwrap()
         );
+        cases += 1;
     }
 }

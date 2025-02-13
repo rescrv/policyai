@@ -5,7 +5,7 @@ use arrrg::CommandLine;
 use rand::prelude::*;
 
 use policyai::data::InjectableAction;
-use policyai::{Policy, PolicyType};
+use policyai::PolicyType;
 
 #[derive(Clone, Default, Debug, Eq, PartialEq, arrrg_derive::CommandLine)]
 struct Options {

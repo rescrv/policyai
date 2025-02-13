@@ -56,6 +56,8 @@ async fn main() -> Result<(), std::io::Error> {
         let mut negatives: Vec<String> = vec![];
         while negatives.len() < options.policies {
             let policy_fragment = policy_fragments.choose(&mut rng).unwrap();
+            // TODO(rescrv): Respect success/total rather than one-shot.  Get funding for compute
+            // first.
             if !policyai::data::policy_applies(
                 None,
                 yammer::GenerateRequest {

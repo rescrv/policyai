@@ -1,10 +1,6 @@
-use std::fs::OpenOptions;
-use std::io::{BufRead, BufReader, Read};
+use std::io::Read;
 
-use guacamole::combinators::*;
-use guacamole::Guacamole;
-
-use policyai::{Field, Policy, PolicyType};
+use policyai::PolicyType;
 
 fn main() {
     let mut buf = vec![];

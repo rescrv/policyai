@@ -45,8 +45,10 @@ async fn main() -> Result<(), std::io::Error> {
     for line in tweets_file.lines() {
         let line = line?;
         let json: serde_json::Value = serde_json::from_str(&line)?;
-        if let serde_json::Value::String(s) = json {
-            tweets.push(s)
+        if let serde_json::Value::Object(obj) = json {
+            if let Some(serde_json::Value::String(text)) = obj.get("text") {
+                tweets.push(text.clone())
+            }
         } else {
             eprintln!("{line} is not a string");
             continue;

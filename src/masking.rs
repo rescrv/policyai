@@ -5,7 +5,7 @@ pub struct MaskGenerator {
 }
 
 impl MaskGenerator {
-    const LENGTH: usize = 5;
+    const LENGTH: usize = 7;
     const MODULUS: u128 = 3404825447;
     const PRIME: u128 = 3404825407;
     const BASE: usize = 23;
@@ -23,8 +23,12 @@ impl MaskGenerator {
     pub fn generate(&mut self) -> String {
         let mut index = self.position;
         let mut s = String::with_capacity(Self::LENGTH);
-        for _ in 0..Self::LENGTH {
-            s.push(Self::BASE23[(index % Self::BASE as u128) as usize]);
+        for i in 0..Self::LENGTH {
+            let mut c = Self::BASE23[(index % Self::BASE as u128) as usize];
+            if i == 0 {
+                c = c.to_ascii_lowercase();
+            }
+            s.push(c);
             index /= Self::BASE as u128;
         }
         self.position = (self.position * Self::PRIME) % Self::MODULUS;
@@ -49,14 +53,14 @@ mod tests {
     #[test]
     fn first_ten_masks() {
         let mut masks = MaskGenerator::default();
-        assert_eq!("FpXHcCM", masks.generate());
-        assert_eq!("PgXrqFP", masks.generate());
+        assert_eq!("fpXHcCM", masks.generate());
+        assert_eq!("pgXrqFP", masks.generate());
         assert_eq!("fJpQVmV", masks.generate());
-        assert_eq!("VFRWmjC", masks.generate());
-        assert_eq!("Rfwwgqj", masks.generate());
-        assert_eq!("GpjCvph", masks.generate());
+        assert_eq!("vFRWmjC", masks.generate());
+        assert_eq!("rfwwgqj", masks.generate());
+        assert_eq!("gpjCvph", masks.generate());
         assert_eq!("ccpjVGX", masks.generate());
-        assert_eq!("HMmmFph", masks.generate());
+        assert_eq!("hMmmFph", masks.generate());
         assert_eq!("pFFHvcc", masks.generate());
         assert_eq!("jrGjMcH", masks.generate());
     }
@@ -69,6 +73,8 @@ mod tests {
             let mask = masks.generate();
             println!("checking {mask}");
             assert!(!seen.contains(&mask));
+            let c = mask.chars().next().unwrap();
+            assert!(c.is_lowercase());
             seen.insert(mask);
         }
     }

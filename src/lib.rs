@@ -679,6 +679,9 @@ impl Report {
         values: &[String],
         on_conflict: OnConflict,
     ) {
+        if !values.contains(&value) {
+            todo!();
+        }
         let build = self.value.get_or_insert_with(|| {
             serde_json::json! {{}}
         });
@@ -748,17 +751,19 @@ impl Report {
         }
     }
 
-    fn report_invariant_violation(&mut self, file: &str, line: u32, message: &str) {}
+    fn report_invariant_violation(&mut self, _file: &str, _line: u32, _message: &str) {}
 
-    fn report_type_check_failure(&mut self, file: &str, line: u32, message: &str) {}
+    fn report_type_check_failure(&mut self, _file: &str, _line: u32, _message: &str) {}
 
-    fn report_bool_conflict(&mut self, field: &str, val1: bool, val2: bool) {}
-    fn report_string_conflict(&mut self, field: &str, val1: String, val2: String) {}
+    fn report_bool_conflict(&mut self, _field: &str, _val1: bool, _val2: bool) {}
+
+    fn report_string_conflict(&mut self, _field: &str, _val1: String, _val2: String) {}
+
     fn report_number_conflict(
         &mut self,
-        field: &str,
-        val1: serde_json::Number,
-        val2: serde_json::Number,
+        _field: &str,
+        _val1: serde_json::Number,
+        _val2: serde_json::Number,
     ) {
     }
 }
@@ -782,10 +787,10 @@ impl std::fmt::Display for Report {
 
 /////////////////////////////////////////// ReportBuilder //////////////////////////////////////////
 
-#[derive(Default)]
 pub struct ReportBuilder {
+    mask_index: usize,
     mask_gen: MaskGenerator,
-    bool_mask: HashMap<(String, bool), String>,
+    bool_mask: HashMap<(String, usize), String>,
     number_mask: HashMap<String, String>,
     string_mask: HashMap<String, String>,
     string_array_mask: HashMap<String, String>,
@@ -800,14 +805,17 @@ pub struct ReportBuilder {
 
 impl ReportBuilder {
     pub fn add_policy(&mut self, policy: &Policy) -> Result<(), PolicyError> {
-        // Assume default=0, so we increment and take, but we increment at the end.
-        let mut content = format!("Rule #{}:\n{}", self.policy_index, policy.prompt);
+        // Assume default=0, so we increment mask_index here (in case we throw out parts of it) and
+        // increment policy_index at the end when we "commit".
+        self.mask_index += 1;
+        let mut content = format!("Rule #{}:  {}", self.policy_index, policy.prompt);
         let mut sample = serde_json::Map::default();
         #[allow(clippy::type_complexity)]
         let mut masks: Vec<(String, Box<dyn Fn(&mut Report, serde_json::Value)>)> = vec![];
         let mut exemplar = serde_json::json! {{}};
         let mut required = self.required.clone();
         let mut properties = self.properties.clone();
+        let mut pre_messages = vec![];
         for field in policy.r#type.fields.iter() {
             let Some(value) = policy.action.get(field.name()) else {
                 continue;
@@ -825,34 +833,23 @@ impl ReportBuilder {
                     };
                     let mask = self
                         .bool_mask
-                        .entry((name.to_string(), *v))
+                        .entry((name.to_string(), self.mask_index))
                         .or_insert_with(|| {
                             let mask = self.mask_gen.generate();
-                            self.messages.push(ChatMessage {
+                            pre_messages.push(ChatMessage {
                                 role: "system".to_string(),
                                 content: format!(
-                                    "Unless specified by a numbered rule, set {mask:?} to false."
+                                    "Unless specified by a matching rule, output {{{mask:?}: {:?}}}.",
+                                    !*v
                                 ),
                                 images: None,
                                 tool_calls: None,
                             });
-                            if *v {
-                                sample.insert(name.to_string(), true.into());
-                            } else {
-                                sample.insert(name.to_string(), false.into());
-                            }
+                            sample.insert(name.to_string(), serde_json::Value::Bool(*v));
                             mask
                         });
-                    if *v {
-                        content += &format!(
-                            r#"  If the rule applies, indicate {name:?} is true by outputting {{{mask:?}: true}} instead."#
-                        );
-                    } else {
-                        content += &format!(
-                            r#"  If the rule applies, indicate {name:?} is false by outputting {{{mask:?}: true}} instead."#
-                        );
-                    }
-                    exemplar[mask.clone()] = true.into();
+                    content = content.replace(&format!("{name:?}"), &format!("{mask:?}"));
+                    exemplar[mask.clone()] = serde_json::Value::Bool(*v);
                     required.push(mask.clone());
                     properties[mask.clone()] = bool::json_schema();
                     let name = name.to_string();
@@ -862,11 +859,11 @@ impl ReportBuilder {
                     masks.push((
                         mask.clone(),
                         Box::new(move |report, reported| {
-                            if let serde_json::Value::Bool(true) = reported {
-                                if is_true {
-                                    report.report_bool(&name, true, on_conflict);
+                            if let serde_json::Value::Bool(ret) = reported {
+                                if ret == is_true {
+                                    report.report_bool(&name, ret, on_conflict);
                                 } else {
-                                    report.report_bool(&name, false, on_conflict);
+                                    report.report_bool_default(&name, default);
                                 }
                             } else {
                                 report.report_type_check_failure(
@@ -875,7 +872,6 @@ impl ReportBuilder {
                                     &format!("expected boolean for {name}"),
                                 );
                             }
-                            report.report_bool_default(&name, default);
                         }),
                     ));
                 }
@@ -931,9 +927,12 @@ impl ReportBuilder {
                         .string_mask
                         .entry(name.to_string())
                         .or_insert_with(|| self.mask_gen.generate());
+                    let serde_json::Value::String(v) = value else {
+                        todo!();
+                    };
                     content = content.replace(&format!("{name:?}"), &format!("{mask:?}"));
                     sample.insert(name.to_string(), value.clone());
-                    exemplar[mask.clone()] = serde_json::Value::Null;
+                    exemplar[mask.clone()] = serde_json::Value::String(v.clone());
                     required.push(mask.clone());
                     properties[mask.clone()] = String::json_schema();
                     let name = name.clone();
@@ -972,9 +971,9 @@ impl ReportBuilder {
                             .entry((name.to_string(), v.to_string()))
                             .or_insert_with(|| {
                                 let mask = self.mask_gen.generate();
-                                self.messages.push(ChatMessage {
+                                pre_messages.push(ChatMessage {
                                     role: "system".to_string(),
-                                    content: format!("Unless specified by a numbered rule, output {{{mask:?}: false}}."),
+                                    content: format!("Unless specified by a matching rule, output {{{mask:?}: false}}."),
                                     images: None,
                                     tool_calls: None,
                                 });
@@ -983,6 +982,8 @@ impl ReportBuilder {
                         exemplar[mask.clone()] = true.into();
                         required.push(mask.clone());
                         properties[mask.clone()] = bool::json_schema();
+                        content = content.replace(&format!("{name:?}"), &format!("{mask:?}"));
+                        content = content.replace(&format!("{v:?}"), "true");
                         let name = name.clone();
                         let default = default.clone();
                         let values = values.clone();
@@ -1076,22 +1077,15 @@ impl ReportBuilder {
                 });
             }
         }
-        self.policy_index += 1;
         self.masks.extend(masks);
-        content += &format!(
-            "  Output the specific JSON (removing null placeholders and inserting values): {}",
-            serde_json::to_string(&exemplar).unwrap()
-        );
+        self.messages.extend(pre_messages);
         self.messages.push(ChatMessage {
             role: "system".to_string(),
             content: content.clone(),
             images: None,
             tool_calls: None,
         });
-        required.push("rules".into());
-        required.push("justification".into());
-        properties["rules"] = Vec::<String>::json_schema();
-        properties["justification"] = String::json_schema();
+        self.policy_index += 1;
         self.required = required;
         self.properties = properties;
         Ok(())
@@ -1140,6 +1134,31 @@ impl ReportBuilder {
         schema["required"] = self.required.clone().into();
         schema["properties"] = self.properties.clone();
         schema
+    }
+}
+
+impl Default for ReportBuilder {
+    fn default() -> ReportBuilder {
+        ReportBuilder {
+            mask_index: 1,
+            mask_gen: MaskGenerator::default(),
+            bool_mask: HashMap::default(),
+            number_mask: HashMap::default(),
+            string_mask: HashMap::default(),
+            string_array_mask: HashMap::default(),
+            string_enum_mask: HashMap::default(),
+            masks: vec![],
+            messages: vec![],
+            policy_index: 1,
+            required: vec![
+                "__matched_rules__".to_string(),
+                "__justification__".to_string(),
+            ],
+            properties: serde_json::json! {{
+                "__matched_rules__": Vec::<f64>::json_schema(),
+                "__justification__": String::json_schema(),
+            }},
+        }
     }
 }
 
@@ -1224,13 +1243,18 @@ impl Manager {
         req.messages = vec![ChatMessage {
             role: "system".to_string(),
             content: r#"
-You are a rule application machine.
+You are tasked with extracting JSON from UNSTRUCTURED DATA.
 
-Your task is to use a numbered list of policies that describe how to extract JSON structure from
-unstructured data.  Each rule makes a statement about the nature of the input that matches and
-what is expected of the output.
+You will be provided with a series of rules that say something about
+UNSTRUCTURED DATA.  When the statement matches, output the specified output
+value.  Otherwise output the specified default value.
 
-Because you are extracting JSON structure for the user, you will respond in JSON.
+Requirements:
+- Evaluate each rule in isolation given UNSTRUCTURED DATA.
+- Output rules that match in the "__matched_rules__" array.
+- Output a plaintext justification of your decision in "__justification__".
+- Compare the outputs chosen to rules in the "__matched_rules__" array.
+- Loose alignment is not enough unless explicitly allowed by a rule in reference to itself.
 "#
             .to_string(),
             images: None,
@@ -1242,8 +1266,14 @@ Because you are extracting JSON structure for the user, you will respond in JSON
         }
         req.messages.extend(report.messages());
         req.messages.push(ChatMessage {
+            role: "system".to_string(),
+            content: "Consider each of the above rules three times.  For each rule, consider whether it applies in isolation.  If so, take the specified action embedded within the rule.".to_string(),
+            images: None,
+            tool_calls: None,
+        });
+        req.messages.push(ChatMessage {
             role: "user".to_string(),
-            content: format!("Unstructured Data: {prompt}"),
+            content: format!("UNSTRUCTURED DATA:\n{prompt}"),
             images: None,
             tool_calls: None,
         });
@@ -1415,7 +1445,9 @@ mod tests {
             ],
         };
         let policy = policy
-            .with_semantic_injection("Set \"priority\" to low and \"unread\" to true.")
+            .with_semantic_injection(
+                "When the email is about AI:  Set \"priority\" to \"low\" and \"unread\" to \"true\".",
+            )
             .await
             .unwrap();
         assert_eq!(
@@ -1434,9 +1466,7 @@ mod tests {
                     messages: vec![],
                     tools: None,
                     stream: None,
-                    options: serde_json::json! {{
-                        "temperature": 0.1,
-                    }},
+                    options: serde_json::json! {{}},
                 },
                 r#"From: robert@example.org
 To: jeff@example.org
