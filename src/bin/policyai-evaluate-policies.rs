@@ -170,7 +170,7 @@ async fn main() {
                 .apply(
                     None,
                     yammer::ChatRequest {
-                        model: "hf.co/unsloth/phi-4-GGUF:f16".to_string(),
+                        model: "phi4".to_string(),
                         format: None,
                         keep_alive: None,
                         messages: vec![],
