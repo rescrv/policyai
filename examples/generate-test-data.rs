@@ -13,16 +13,13 @@ struct Options {
     decidables: String,
     #[arrrg(required, "The actions.")]
     actions: String,
-    #[arrrg(
-        required,
-        "This many tweets will be selected to have policies applied."
-    )]
+    #[arrrg(required, "This many texts will be selected to have policies applied.")]
     samples: usize,
     #[arrrg(required, "The policy type definition.")]
     policy: String,
-    #[arrrg(required, "This many policies will be selected per tweet.")]
+    #[arrrg(required, "This many policies will be selected per text.")]
     policies: usize,
-    #[arrrg(required, "This many policies will be enforced to match per tweet.")]
+    #[arrrg(required, "This many policies will be enforced to match per text.")]
     matching: usize,
 }
 
@@ -134,7 +131,7 @@ async fn main() -> Result<(), std::io::Error> {
         println!(
             "{}",
             serde_json::to_string(&policyai::data::TestDataPoint {
-                tweet: injection.tweet.clone(),
+                text: injection.text.clone(),
                 policies,
                 expected,
             })

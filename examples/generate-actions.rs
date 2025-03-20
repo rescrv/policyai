@@ -20,12 +20,18 @@ fn generate_case(
         } => {
             let (semantic_injection, truth) = if coin()(guac) {
                 (
-                    format!("When this rule matches, output {{{:?}: true}}.", name),
+                    format!(
+                        "\n\nWhen this rule's criteria matches, output {{{:?}: true}}.",
+                        name
+                    ),
                     true,
                 )
             } else {
                 (
-                    format!("When this rule matches, output {{{:?}: false}}.", name),
+                    format!(
+                        "\n\nWhen this rule's criteria matches, output {{{:?}: false}}.",
+                        name
+                    ),
                     false,
                 )
             };
@@ -40,8 +46,10 @@ fn generate_case(
             on_conflict: _,
             default: _,
         } => {
-            let semantic_injection =
-                format!("When this rule matches, output {{{:?}: {}}}.", name, index);
+            let semantic_injection = format!(
+                "\n\nWhen this rule's criteria matches, output {{{:?}: {}}}.",
+                name, index
+            );
             serde_json::to_value(InjectableAction {
                 inject: semantic_injection,
                 action: serde_json::json! {{ name : index }},
@@ -54,7 +62,7 @@ fn generate_case(
             default: _,
         } => {
             let semantic_injection = format!(
-                "When this rule matches, output {{{:?}: \"{}\"}}.",
+                "\n\nWhen this rule's criteria matches, output {{{:?}: \"{}\"}}.",
                 name, index
             );
             serde_json::to_value(InjectableAction {
@@ -65,7 +73,7 @@ fn generate_case(
         }
         Field::StringArray { name } => {
             let semantic_injection = format!(
-                "When this rule matches, output {{{:?}: [\"{}\"]}}.",
+                "\n\nWhen this rule's criteria matches, output {{{:?}: [\"{}\"]}}.",
                 name, index
             );
             serde_json::to_value(InjectableAction {

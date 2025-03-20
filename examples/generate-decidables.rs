@@ -8,12 +8,9 @@ use rand::prelude::*;
 struct Options {
     #[arrrg(optional, "The ollama host to connect to.")]
     host: Option<String>,
-    #[arrrg(
-        required,
-        "This many tweets will be selected to have policies applied."
-    )]
+    #[arrrg(required, "This many text will be selected to have policies applied.")]
     samples: usize,
-    #[arrrg(required, "This many policies will be selected per tweet.")]
+    #[arrrg(required, "This many policies will be selected per text.")]
     policies: usize,
     #[arrrg(required, "The model to use for generating policies.")]
     model: String,
@@ -51,36 +48,46 @@ async fn main() -> Result<(), std::io::Error> {
         semantic_injections.push(injection);
     }
     let mut rng = rand::rng();
-    for _ in 0..options.samples {
+    for sample_number in 0..options.samples {
+        eprintln!("done {} samples", sample_number);
         let injection = semantic_injections.choose(&mut rng).unwrap();
         let mut negatives: Vec<String> = vec![];
         while negatives.len() < options.policies {
+            eprintln!("generated {} negatives", negatives.len());
             let policy_fragment = policy_fragments.choose(&mut rng).unwrap();
-            // TODO(rescrv): Respect success/total rather than one-shot.  Get funding for compute
-            // first.
-            if !policyai::data::policy_applies(
-                None,
-                yammer::GenerateRequest {
-                    model: options.model.to_string(),
-                    prompt: "".to_string(),
-                    format: None,
-                    images: None,
-                    keep_alive: None,
-                    suffix: None,
-                    system: None,
-                    template: None,
-                    stream: Some(false),
-                    raw: None,
-                    options: Some(options.param.clone().into()),
-                },
-                &injection.tweet,
-                policy_fragment,
-                options.success,
-                options.total,
-            )
-            .await
-            .unwrap()
-            {
+            let mut successes = 0;
+            let mut failures = 0;
+            while successes < options.success && successes + failures < options.total {
+                let negative_applies = !policyai::data::policy_applies(
+                    None,
+                    yammer::GenerateRequest {
+                        model: options.model.to_string(),
+                        prompt: "".to_string(),
+                        format: None,
+                        images: None,
+                        keep_alive: None,
+                        suffix: None,
+                        system: None,
+                        template: None,
+                        stream: Some(false),
+                        raw: None,
+                        options: Some(options.param.clone().into()),
+                    },
+                    &injection.text,
+                    policy_fragment,
+                    options.success,
+                    options.total,
+                )
+                .await
+                .unwrap();
+                if negative_applies {
+                    successes += 1;
+                } else {
+                    failures += 1;
+                }
+                eprintln!("done {} negative tests", successes + failures);
+            }
+            if successes >= options.success {
                 negatives.push(policy_fragment.clone());
             }
         }
@@ -89,7 +96,7 @@ async fn main() -> Result<(), std::io::Error> {
             serde_json::to_string(&policyai::data::DecidableSemanticInjection {
                 positives: injection.injections.clone(),
                 negatives,
-                tweet: injection.tweet.clone(),
+                text: injection.text.clone(),
             })
             .unwrap()
         );

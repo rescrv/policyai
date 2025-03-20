@@ -8,12 +8,9 @@ use rand::prelude::*;
 struct Options {
     #[arrrg(optional, "The ollama host to connect to.")]
     host: Option<String>,
-    #[arrrg(
-        required,
-        "This many tweets will be selected to have policies applied."
-    )]
+    #[arrrg(required, "This many texts will be selected to have policies applied.")]
     samples: usize,
-    #[arrrg(required, "This many policies will be selected per tweet.")]
+    #[arrrg(required, "This many policies will be selected per text.")]
     policies: usize,
     #[arrrg(required, "The model to use for generating policies.")]
     model: String,
@@ -40,14 +37,14 @@ async fn main() -> Result<(), std::io::Error> {
         eprintln!("expected TWEETS");
         std::process::exit(13);
     }
-    let tweets_file = BufReader::new(OpenOptions::new().read(true).open(&free[0]).unwrap());
-    let mut tweets = vec![];
-    for line in tweets_file.lines() {
+    let texts_file = BufReader::new(OpenOptions::new().read(true).open(&free[0]).unwrap());
+    let mut texts = vec![];
+    for line in texts_file.lines() {
         let line = line?;
         let json: serde_json::Value = serde_json::from_str(&line)?;
         if let serde_json::Value::Object(obj) = json {
             if let Some(serde_json::Value::String(text)) = obj.get("text") {
-                tweets.push(text.clone())
+                texts.push(text.clone())
             }
         } else {
             eprintln!("{line} is not a string");
@@ -56,21 +53,21 @@ async fn main() -> Result<(), std::io::Error> {
     }
     let mut rng = rand::rng();
     for _ in 0..options.samples {
-        let tweet = tweets.choose(&mut rng).unwrap();
+        let text = texts.choose(&mut rng).unwrap();
         let mut injections: Vec<String> = vec![];
         while injections.len() < options.policies {
             let system = r#"
 A user is developing an application for custom policy-driven extraction of information from a stream
-of tweets.  To do this, they will specify in plain language a pattern that matches the tweet and an
+of texts.  To do this, they will specify in plain language a pattern that matches the text and an
 action to perform when the pattern specified in the rule matches.
 
-Your job is to write a sample policy for a given tweet.  I will give you the tweet and you will
-give me an English sentence that specifies some property of the tweet.
+Your job is to write a sample policy for a given text.  I will give you the text and you will
+give me an English sentence that specifies some property of the text.
 
 Restrictions:
 - Provide just one sentence of response.
 - Do not provide any pro-forma formatting or exposition.
-- Provide your response in active voice with straightforward instructions, e.g., "Policy:  The tweet
+- Provide your response in active voice with straightforward instructions, e.g., "Policy:  The text
   is about deep learning and neural networks."
 - Do not provide instructions for what to extract.  Your responsibility is limited to simply
   specifying the pattern of text to match using natural language.
@@ -79,8 +76,8 @@ Restrictions:
             .to_string();
             let prompt = format!(
                 r#"
-Tweet:
-{tweet}
+Text:
+{text}
 "#
             );
             let req = yammer::GenerateRequest {
@@ -128,7 +125,7 @@ Tweet:
                     raw: None,
                     options: Some(options.param.clone().into()),
                 },
-                tweet,
+                text,
                 &response,
                 options.success,
                 options.total,
@@ -143,7 +140,7 @@ Tweet:
             "{}",
             serde_json::to_string(&policyai::data::SemanticInjection {
                 injections,
-                tweet: tweet.to_string()
+                text: text.to_string()
             })
             .unwrap()
         );

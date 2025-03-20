@@ -15,28 +15,25 @@ pub async fn naive_apply(
         content: r#"
 You are tasked with extracting structure from unstructured data.
 
-You will be provided a series of rules specifying attributes about the provided UNSTRUCTURED DATA.
-For each rule, there are zero or more associated outputs.  For each output, specify the default
-value or "" (the empty string) if I don't specify to do otherwise.
+You will be provided a series of rules specifying criteria about UNSTRUCTURED DATA.
+For each rule, there are zero or more associated outputs.
 
-In case it isn't clear, you are extracting JSON from UNSTRUCTURED DATA, so please respond in JSON.
+Respond in JSON.
 
 Detailed Instructions:
 1.  Locate all default instructions and prepare to follow them.
 2.  For each instruction below, consider it carefully.
-    a.  For Rules:  Check that the rule semantically describes UNSTRUCTURED DATA.
-        i.  If the rule describes UNSTRUCTURED DATA, locate the associated instruction to decide
-            how to output the fact that the rule matches.  The instructions and instructions alone
-            portray this information.
-        ii. If the rule does not describe UNSTRUCTURED DATA, do not follow the instructions
+    a.  For Rules:  Check that the rule's criteria describes UNSTRUCTURED DATA.
+        i.  If the rule describes UNSTRUCTURED DATA, decide how to output the fact that the rule
+            matches.  The instructions and instructions alone portray this information.
+            Output the associated output.  Add the output to the __matched_rules__.
+        ii. If the rule does not describe UNSTRUCTURED DATA, do not follow any instructions
             pertaning to the rule.
-
-    b.  For default instructions:  Output the value unless otherwise specified.
-3.  Multiple rules may match.  Repeat instruction two until no further instructions are generated.
+3.  Multiple rules may match.  Repeat instruction 2 until no further changes.
 4.  It's possible to miss rules that apply.  Double check your work by following steps 1-3 again.
 5.  Prepare the Justification field.  This should include a justification for each rule of why it
     was or was not matched.
-5.  Output the final result as JSON.
+6.  Output the final result as JSON.
 "#
         .to_string(),
         images: None,
@@ -109,13 +106,13 @@ Detailed Instructions:
     schema["required"] = required.into();
     schema["properties"] = properties;
     let req = yammer::ChatRequest {
-        model: "phi4".to_string(),
+        model: "qwq:32b-q8_0".to_string(),
         messages,
         format: Some(schema),
         stream: Some(false),
         keep_alive: None,
         options: serde_json::json! {{
-            "temperature": 0.1,
+            "num_ctx": 16_000,
         }},
         tools: None,
     };
@@ -159,54 +156,17 @@ async fn main() {
             for policy in point.policies.iter() {
                 manager.add(policy.clone());
             }
-            let baseline = match naive_apply(&point.policies, &point.tweet).await {
+            let baseline = match naive_apply(&point.policies, &point.text).await {
                 Ok(baseline) => baseline,
                 Err(_) => {
                     baseline_fail += 1;
                     serde_json::json! {{}}
                 }
             };
-            let report = match manager
-                .apply(
-                    None,
-                    yammer::ChatRequest {
-                        model: "phi4".to_string(),
-                        format: None,
-                        keep_alive: None,
-                        messages: vec![],
-                        tools: None,
-                        stream: None,
-                        options: serde_json::json! {{ "num_ctx": 16_000 }},
-                    },
-                    &point.tweet,
-                )
-                .await
-            {
-                Ok(returned) => returned,
-                Err(_) => {
-                    conflict += 1;
-                    continue;
-                }
-            };
             let expected = &point.expected;
-            let serde_json::Value::Object(returned) = report.value() else {
-                panic!("returned value not struct {:?}", report.value());
-            };
             let serde_json::Value::Object(expected) = expected else {
                 panic!("expected value not struct");
             };
-            let mut f = false;
-            for (k, e) in expected {
-                if let Some(r) = returned.get(k) {
-                    if r != e {
-                        experimental_unequal += 1;
-                        f = true;
-                    }
-                } else {
-                    experimental_miss += 1;
-                    f = true;
-                }
-            }
             let mut b = false;
             for (k, e) in expected {
                 if let Some(r) = baseline.get(k) {
@@ -224,6 +184,46 @@ async fn main() {
             } else {
                 baseline_success += 1;
             }
+            let report = match manager
+                .apply(
+                    None,
+                    yammer::ChatRequest {
+                        model: "qwq:32b-q8_0".to_string(),
+                        format: None,
+                        keep_alive: None,
+                        messages: vec![],
+                        tools: None,
+                        stream: None,
+                        options: serde_json::json! {{
+                            "num_ctx": 16_000
+                        }},
+                    },
+                    &point.text,
+                )
+                .await
+            {
+                Ok(returned) => returned,
+                Err(_) => {
+                    conflict += 1;
+                    eprintln!("CONFLICT!");
+                    continue;
+                }
+            };
+            let serde_json::Value::Object(returned) = report.value() else {
+                panic!("returned value not struct {:?}", report.value());
+            };
+            let mut f = false;
+            for (k, e) in expected {
+                if let Some(r) = returned.get(k) {
+                    if r != e {
+                        experimental_unequal += 1;
+                        f = true;
+                    }
+                } else {
+                    experimental_miss += 1;
+                    f = true;
+                }
+            }
             if f {
                 fail += 1;
                 eprintln!(
@@ -239,7 +239,7 @@ async fn main() {
             eprintln!(
                 "baseline={baseline_success}/{} experimental={success}/{}",
                 baseline_success + baseline_fail,
-                success + fail
+                success + fail + conflict
             );
         }
     }

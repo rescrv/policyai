@@ -1,4 +1,4 @@
-MODEL := phi4
+MODEL := qwq:32b-q8_0
 SAMPLES := 100
 POLICIES := 10
 MATCHING := 1

@@ -5,13 +5,13 @@ use crate::Policy;
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct SemanticInjection {
     pub injections: Vec<String>,
-    pub tweet: String,
+    pub text: String,
 }
 
 pub async fn policy_applies(
     host: Option<String>,
     mut req: yammer::GenerateRequest,
-    tweet: &str,
+    text: &str,
     semantic_injection: &str,
     k: usize,
     n: usize,
@@ -21,26 +21,20 @@ pub async fn policy_applies(
     while success < k && total < n {
         total += 1;
         let system = r#"
-A user is developing an application for custom policy-driven extraction of information from a stream
-of tweets.  To do this, they will specify in plain language a pattern that matches the tweet and an
-action to perform when the pattern specified in the rule matches.
+You are tasked with determining whether provided CRITERIA match some UNSTRUCUTRED DATA.
 
-Your job is to return a JSON boolean that indicates if the user's policy matches the tweet.
+Your job is to return a JSON boolean that indicates if the user's CRITERIA matches the UNSTRUCTURED DATA.
 
-Be very specific.  The user has chosen their words carefully.
-
-Return {"policy_applies": true} if you are sure the tweet matches the polciy.
+Return {"policy_applies": true} if you are sure the UNSTRUCTURED DATA matches the CRITERIA.
 Return {"policy_applies": false} otherwise.
-
-Policy:
 "#
         .to_string();
         let prompt = format!(
             r#"
-Tweet:
-{tweet}
+UNSTRUCTURED DATA:
+{text}
 
-Policy:
+CRITERIA:
 {semantic_injection}
 "#
         );
@@ -77,7 +71,7 @@ Policy:
 pub struct DecidableSemanticInjection {
     pub positives: Vec<String>,
     pub negatives: Vec<String>,
-    pub tweet: String,
+    pub text: String,
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
@@ -88,7 +82,7 @@ pub struct InjectableAction {
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct TestDataPoint {
-    pub tweet: String,
+    pub text: String,
     pub policies: Vec<Policy>,
     pub expected: serde_json::Value,
 }

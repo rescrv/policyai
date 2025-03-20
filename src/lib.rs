@@ -1,5 +1,6 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use yammer::{ollama_host, ChatMessage, JsonSchema};
 
@@ -110,7 +111,7 @@ Notice how in this example, \"baz\" is not set because it does not appear in the
 "#
         .to_string();
         let req = yammer::GenerateRequest {
-            model: "phi4".to_string(),
+            model: "phi4:14b-fp16".to_string(),
             prompt: injection.to_string(),
             system: Some(system),
             format: Some(schema),
@@ -121,7 +122,7 @@ Notice how in this example, \"baz\" is not set because it does not appear in the
             keep_alive: None,
             raw: None,
             options: Some(serde_json::json! {{
-                "temperature": 0.1,
+                "num_ctx": 16_000,
             }}),
         };
         let resp = req
@@ -393,37 +394,333 @@ pub struct Policy {
 
 #[derive(Clone, Debug)]
 pub enum PolicyError {
-    Inconsistent {
-        field: String,
-        expected: Option<serde_json::Value>,
-        returned: Option<serde_json::Value>,
-    },
-    ActionOmitted {
-        field_name: String,
-        action: serde_json::Value,
-    },
-    ExpectedBool {
-        field_name: String,
-    },
-    ExpectedNumber {
-        field_name: String,
-    },
-    ExpectedString {
-        field_name: String,
-    },
+    Inconsistent { field: Field },
+    ExpectedBool { field_name: String },
+    ExpectedNumber { field_name: String },
+    ExpectedString { field_name: String },
 }
+
+/////////////////////////////////////////// SemanticMask ///////////////////////////////////////////
+
+pub trait SemanticMask {}
+
+///////////////////////////////////////////// BoolMask /////////////////////////////////////////////
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct BoolMask {
+    pub policy_index: usize,
+    pub name: String,
+    pub mask: String,
+    pub default: bool,
+    pub is_true: bool,
+    pub on_conflict: OnConflict,
+}
+
+impl BoolMask {
+    pub fn new(
+        policy_index: usize,
+        name: String,
+        mask: String,
+        default: bool,
+        is_true: bool,
+        on_conflict: OnConflict,
+    ) -> Self {
+        Self {
+            policy_index,
+            name,
+            mask,
+            default,
+            is_true,
+            on_conflict,
+        }
+    }
+
+    pub fn apply_to(&self, ir: &serde_json::Value, report: &mut Report) {
+        match ir.get(&self.mask) {
+            Some(serde_json::Value::Bool(ret)) => {
+                if *ret == self.is_true {
+                    report.report_bool(self.policy_index, &self.name, *ret, self.on_conflict);
+                } else {
+                    report.report_bool_default(&self.name, self.default);
+                }
+            }
+            Some(_) => {
+                report.report_type_check_failure(
+                    file!(),
+                    line!(),
+                    &format!("expected boolean for {}", self.name),
+                );
+            }
+            None => {
+                report.report_bool_default(&self.name, self.default);
+            }
+        }
+    }
+}
+
+//////////////////////////////////////////// NumberMask ////////////////////////////////////////////
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct NumberMask {
+    pub policy_index: usize,
+    pub name: String,
+    pub mask: String,
+    pub default: Option<t64>,
+    pub value: serde_json::Number,
+    pub on_conflict: OnConflict,
+}
+
+impl NumberMask {
+    pub fn new(
+        policy_index: usize,
+        name: String,
+        mask: String,
+        default: Option<t64>,
+        value: serde_json::Number,
+        on_conflict: OnConflict,
+    ) -> Self {
+        Self {
+            policy_index,
+            name,
+            mask,
+            default,
+            value,
+            on_conflict,
+        }
+    }
+
+    pub fn apply_to(&self, ir: &serde_json::Value, report: &mut Report) {
+        /*
+        match ir.get(&self.mask) {
+            Some(serde_json::Value::Number(value)) => {
+                report.report_number(
+                    self.policy_index,
+                    &self.name,
+                    value.clone(),
+                    self.on_conflict,
+                );
+            }
+            Some(_) => {
+                report.report_type_check_failure(
+                    file!(),
+                    line!(),
+                    &format!("expected number for {}", self.name),
+                );
+            }
+            None => {
+                if let Some(default) = self.default.as_ref() {
+                    if let Some(default) = serde_json::Number::from_f64(default.0) {
+                        report.report_number_default(&self.name, default);
+                    } else {
+                        report.report_invariant_violation(
+                            file!(),
+                            line!(),
+                            "cannot cast to number",
+                        );
+                    }
+                }
+            }
+        }
+        */
+    }
+}
+
+//////////////////////////////////////////// StringMask ////////////////////////////////////////////
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct StringMask {
+    pub policy_index: usize,
+    pub name: String,
+    pub mask: String,
+    pub default: Option<String>,
+    pub value: String,
+    pub on_conflict: OnConflict,
+}
+
+impl StringMask {
+    pub fn new(
+        policy_index: usize,
+        name: String,
+        mask: String,
+        default: Option<String>,
+        value: String,
+        on_conflict: OnConflict,
+    ) -> Self {
+        Self {
+            policy_index,
+            name,
+            mask,
+            default,
+            value,
+            on_conflict,
+        }
+    }
+
+    pub fn apply_to(&self, ir: &serde_json::Value, report: &mut Report) {
+        /*
+        match ir.get(&self.mask) {
+            Some(serde_json::Value::String(value)) => {
+                report.report_string(self.policy_index, &self.name, value, self.on_conflict);
+            }
+            Some(_) => {
+                report.report_type_check_failure(
+                    file!(),
+                    line!(),
+                    &format!("expected string for {}", self.name),
+                );
+            }
+            _ => {
+                if let Some(default) = self.default.as_ref() {
+                    report.report_string_default(&self.name, default);
+                }
+            }
+        }
+        */
+    }
+}
+
+/*
+                           if let serde_json::Value::String(s) = reported {
+                           } else {
+                           }
+                           if let Some(default) = &default {
+                           }
+*/
+
+////////////////////////////////////////// StringArrayMask /////////////////////////////////////////
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct StringArrayMask {
+    pub policy_index: usize,
+    pub name: String,
+    pub mask: String,
+}
+
+impl StringArrayMask {
+    pub fn new(policy_index: usize, name: String, mask: String, value: Vec<String>) -> Self {
+        Self {
+            policy_index,
+            name,
+            mask,
+        }
+    }
+
+    pub fn apply_to(&self, report: &mut Report) {
+        todo!();
+    }
+}
+
+/*
+                   masks.push((
+                       mask.clone(),
+                       Arc::new(move |report, reported| {
+                           fn extract_strings(
+                               value: &serde_json::Value,
+                               depth: usize,
+                           ) -> Option<Vec<String>> {
+                               if depth == 0 {
+                                   None
+                               } else if let serde_json::Value::String(s) = value {
+                                   Some(vec![s.clone()])
+                               } else if let serde_json::Value::Array(a) = value {
+                                   let mut all = vec![];
+                                   for v in a {
+                                       all.extend(extract_strings(v, depth - 1)?.into_iter());
+                                   }
+                                   Some(all)
+                               } else {
+                                   None
+                               }
+                           }
+                           match extract_strings(&reported, 128) {
+                               Some(strings) => {
+                                   for s in strings {
+                                       report.report_string_array(policy_index, &name, s);
+                                   }
+                               }
+                               None => {
+                                   report.report_type_check_failure(
+                                       file!(),
+                                       line!(),
+                                       &format!("expected [string] for {name}"),
+                                   );
+                               }
+                           }
+                       }),
+                   ));
+*/
+
+////////////////////////////////////////// StringEnumMask //////////////////////////////////////////
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct StringEnumMask {
+    pub policy_index: usize,
+    pub name: String,
+    pub mask: String,
+}
+
+impl StringEnumMask {
+    pub fn new(
+        policy_index: usize,
+        name: String,
+        mask: String,
+        default: Option<String>,
+        value: String,
+        on_conflict: OnConflict,
+    ) -> Self {
+        Self {
+            policy_index,
+            name,
+            mask,
+        }
+    }
+
+    pub fn apply_to(&self, report: &mut Report) {
+        todo!();
+    }
+}
+
+/*
+    masks.push((
+        mask.to_string(),
+        Arc::new(move |report, reported| {
+            if let serde_json::Value::Bool(true) = reported {
+                report.report_string_enum(
+                    policy_index,
+                    &name,
+                    v.clone(),
+                    &values,
+                    on_conflict,
+                );
+            } else {
+                report.report_type_check_failure(
+                    file!(),
+                    line!(),
+                    &format!("expected string for {name}"),
+                );
+            }
+            if let Some(default) = &default {
+                report.report_string_default(&name, default);
+            }
+        }),
+    ));
+}
+*/
 
 ////////////////////////////////////////////// Report //////////////////////////////////////////////
 
 #[derive(serde::Deserialize, serde::Serialize)]
 pub struct Report {
-    messages: Vec<ChatMessage>,
-    bool_mask: HashMap<String, String>,
-    number_mask: HashMap<String, String>,
-    string_mask: HashMap<String, String>,
-    string_array_mask: HashMap<String, String>,
-    string_enum_mask: HashMap<String, String>,
-    ir: Option<serde_json::Value>,
+    pub messages: Vec<ChatMessage>,
+    pub bool_masks: Vec<BoolMask>,
+    pub number_masks: Vec<NumberMask>,
+    pub string_masks: Vec<StringMask>,
+    pub string_array_masks: Vec<StringArrayMask>,
+    pub string_enum_masks: Vec<StringEnumMask>,
+    pub masks_by_index: Vec<Vec<String>>,
+    pub rules_matched: Vec<usize>,
+    pub ir: Option<serde_json::Value>,
+
     default: Option<serde_json::Value>,
     value: Option<serde_json::Value>,
 }
@@ -439,16 +736,27 @@ impl Report {
         value
     }
 
-    pub fn report_bool_default(&mut self, field: &str, default: bool) {
+    fn report_bool_default(&mut self, field: &str, default: bool) {
         let build = self.default.get_or_insert_with(|| {
             serde_json::json! {{}}
         });
-        if build.get(field).is_none() {
+        if let Some(existing) = build.get(field) {
+            if *existing != serde_json::Value::Bool(default) {
+                todo!();
+            }
+        } else {
             build[field.to_string()] = default.into();
         }
     }
 
-    pub fn report_bool(&mut self, field: &str, value: bool, on_conflict: OnConflict) {
+    fn report_bool(
+        &mut self,
+        policy_index: usize,
+        field: &str,
+        value: bool,
+        on_conflict: OnConflict,
+    ) {
+        self.report_policy_index(policy_index);
         let build = self.value.get_or_insert_with(|| {
             serde_json::json! {{}}
         });
@@ -466,9 +774,6 @@ impl Report {
                             OnConflict::LargestValue => {
                                 if value {
                                     *b = value;
-                                } else {
-                                    let b = *b;
-                                    self.report_bool_conflict(field, b, value);
                                 }
                             }
                         }
@@ -504,7 +809,7 @@ impl Report {
         }
     }
 
-    pub fn report_number_default(&mut self, field: &str, default: impl Into<serde_json::Number>) {
+    fn report_number_default(&mut self, field: &str, default: impl Into<serde_json::Number>) {
         let default = default.into();
         let build = self.default.get_or_insert_with(|| {
             serde_json::json! {{}}
@@ -518,12 +823,14 @@ impl Report {
         }
     }
 
-    pub fn report_number(
+    fn report_number(
         &mut self,
+        policy_index: usize,
         field: &str,
         value: impl Into<serde_json::Number>,
         on_conflict: OnConflict,
     ) {
+        self.report_policy_index(policy_index);
         let value = value.into();
         let build = self.value.get_or_insert_with(|| {
             serde_json::json! {{}}
@@ -540,6 +847,7 @@ impl Report {
                         } else if lhs.is_i64() && rhs.is_i64() {
                             lhs.as_i64() == rhs.as_i64()
                         } else {
+                            // TODO(rescrv):  We can do better by considering all possibilities.
                             false
                         }
                     }
@@ -551,10 +859,11 @@ impl Report {
                         } else if lhs.is_i64() && rhs.is_i64() {
                             lhs.as_i64() < rhs.as_i64()
                         } else {
+                            // TODO(rescrv):  We can do better by considering all possibilities.
                             false
                         }
                     }
-                    if is_equal(&*n, &value) {
+                    if !is_equal(&*n, &value) {
                         match on_conflict {
                             OnConflict::Default => {}
                             OnConflict::Agreement => {
@@ -576,21 +885,21 @@ impl Report {
                     self.report_invariant_violation(
                         file!(),
                         line!(),
-                        "bool found in place of string",
+                        "bool found in place of number",
                     );
                 }
                 serde_json::Value::String(_) => {
                     self.report_invariant_violation(
                         file!(),
                         line!(),
-                        "string found in place of bool",
+                        "string found in place of number",
                     );
                 }
                 serde_json::Value::Array(_) => {
                     self.report_invariant_violation(
                         file!(),
                         line!(),
-                        "array found in place of string",
+                        "array found in place of number",
                     );
                 }
                 serde_json::Value::Object(_) => {
@@ -602,7 +911,7 @@ impl Report {
         }
     }
 
-    pub fn report_string_default(&mut self, field: &str, default: impl Into<String>) {
+    fn report_string_default(&mut self, field: &str, default: impl Into<String>) {
         let default = default.into();
         let build = self.default.get_or_insert_with(|| {
             serde_json::json! {{}}
@@ -616,7 +925,14 @@ impl Report {
         }
     }
 
-    pub fn report_string(&mut self, field: &str, value: String, on_conflict: OnConflict) {
+    fn report_string(
+        &mut self,
+        policy_index: usize,
+        field: &str,
+        value: String,
+        on_conflict: OnConflict,
+    ) {
+        self.report_policy_index(policy_index);
         let build = self.value.get_or_insert_with(|| {
             serde_json::json! {{}}
         });
@@ -634,9 +950,6 @@ impl Report {
                             OnConflict::LargestValue => {
                                 if value.len() > s.len() {
                                     *v = value.into();
-                                } else {
-                                    let s = s.clone();
-                                    self.report_string_conflict(field, s, value);
                                 }
                             }
                         }
@@ -672,13 +985,15 @@ impl Report {
         }
     }
 
-    pub fn report_string_enum(
+    fn report_string_enum(
         &mut self,
+        policy_index: usize,
         field: &str,
         value: String,
         values: &[String],
         on_conflict: OnConflict,
     ) {
+        self.report_policy_index(policy_index);
         if !values.contains(&value) {
             todo!();
         }
@@ -711,21 +1026,21 @@ impl Report {
                     self.report_invariant_violation(
                         file!(),
                         line!(),
-                        "bool found in place of string",
+                        "bool found in place of string enum",
                     );
                 }
                 serde_json::Value::Number(_) => {
                     self.report_invariant_violation(
                         file!(),
                         line!(),
-                        "number found in place of string",
+                        "number found in place of string enum",
                     );
                 }
                 serde_json::Value::Array(_) => {
                     self.report_invariant_violation(
                         file!(),
                         line!(),
-                        "array found in place of string",
+                        "array found in place of string enum",
                     );
                 }
                 serde_json::Value::Object(_) => {
@@ -737,7 +1052,8 @@ impl Report {
         }
     }
 
-    pub fn report_string_array(&mut self, field: &str, value: String) {
+    fn report_string_array(&mut self, policy_index: usize, field: &str, value: String) {
+        self.report_policy_index(policy_index);
         let build = self.value.get_or_insert_with(|| {
             serde_json::json! {{}}
         });
@@ -751,13 +1067,25 @@ impl Report {
         }
     }
 
-    fn report_invariant_violation(&mut self, _file: &str, _line: u32, _message: &str) {}
+    fn report_policy_index(&mut self, policy_index: usize) {
+        self.rules_matched.push(policy_index);
+    }
 
-    fn report_type_check_failure(&mut self, _file: &str, _line: u32, _message: &str) {}
+    fn report_invariant_violation(&mut self, _file: &str, _line: u32, _message: &str) {
+        panic!();
+    }
 
-    fn report_bool_conflict(&mut self, _field: &str, _val1: bool, _val2: bool) {}
+    fn report_type_check_failure(&mut self, _file: &str, _line: u32, _message: &str) {
+        panic!();
+    }
 
-    fn report_string_conflict(&mut self, _field: &str, _val1: String, _val2: String) {}
+    fn report_bool_conflict(&mut self, _field: &str, _val1: bool, _val2: bool) {
+        panic!();
+    }
+
+    fn report_string_conflict(&mut self, _field: &str, _val1: String, _val2: String) {
+        panic!();
+    }
 
     fn report_number_conflict(
         &mut self,
@@ -765,6 +1093,7 @@ impl Report {
         _val1: serde_json::Number,
         _val2: serde_json::Number,
     ) {
+        panic!();
     }
 }
 
@@ -787,16 +1116,17 @@ impl std::fmt::Display for Report {
 
 /////////////////////////////////////////// ReportBuilder //////////////////////////////////////////
 
+#[derive(Clone)]
 pub struct ReportBuilder {
     mask_index: usize,
     mask_gen: MaskGenerator,
-    bool_mask: HashMap<(String, usize), String>,
-    number_mask: HashMap<String, String>,
-    string_mask: HashMap<String, String>,
-    string_array_mask: HashMap<String, String>,
-    string_enum_mask: HashMap<(String, String), String>,
-    #[allow(clippy::type_complexity)]
-    masks: Vec<(String, Box<dyn Fn(&mut Report, serde_json::Value)>)>,
+    bool_masks: Vec<BoolMask>,
+    number_masks: Vec<NumberMask>,
+    string_masks: Vec<StringMask>,
+    string_array_masks: Vec<StringArrayMask>,
+    string_enum_masks: Vec<StringEnumMask>,
+    masks_by_index: Vec<Vec<String>>,
+    default_return: serde_json::Value,
     messages: Vec<ChatMessage>,
     policy_index: usize,
     required: Vec<String>,
@@ -808,14 +1138,23 @@ impl ReportBuilder {
         // Assume default=0, so we increment mask_index here (in case we throw out parts of it) and
         // increment policy_index at the end when we "commit".
         self.mask_index += 1;
-        let mut content = format!("Rule #{}:  {}", self.policy_index, policy.prompt);
-        let mut sample = serde_json::Map::default();
+        let mut content = format!(
+            "Rule #{}:
+Criteria: {}",
+            self.policy_index, policy.prompt
+        );
         #[allow(clippy::type_complexity)]
-        let mut masks: Vec<(String, Box<dyn Fn(&mut Report, serde_json::Value)>)> = vec![];
-        let mut exemplar = serde_json::json! {{}};
         let mut required = self.required.clone();
         let mut properties = self.properties.clone();
-        let mut pre_messages = vec![];
+        let mut bool_masks = self.bool_masks.clone();
+        let mut number_masks = self.number_masks.clone();
+        let mut string_masks = self.string_masks.clone();
+        let mut string_array_masks = self.string_array_masks.clone();
+        let mut string_enum_masks = self.string_enum_masks.clone();
+        let mut masks_by_index = self.masks_by_index.clone();
+        masks_by_index.push(vec![]);
+        // SAFETY(rescrv):  We push, we pop, we never stop.
+        let masks = masks_by_index.last_mut().unwrap();
         for field in policy.r#type.fields.iter() {
             let Some(value) = policy.action.get(field.name()) else {
                 continue;
@@ -828,133 +1167,100 @@ impl ReportBuilder {
                 } => {
                     let serde_json::Value::Bool(v) = value else {
                         return Err(PolicyError::ExpectedBool {
-                            field_name: name.to_string(),
+                            field_name: name.clone(),
                         });
                     };
-                    let mask = self
-                        .bool_mask
-                        .entry((name.to_string(), self.mask_index))
-                        .or_insert_with(|| {
-                            let mask = self.mask_gen.generate();
-                            pre_messages.push(ChatMessage {
-                                role: "system".to_string(),
-                                content: format!(
-                                    "Unless specified by a matching rule, output {{{mask:?}: {:?}}}.",
-                                    !*v
-                                ),
-                                images: None,
-                                tool_calls: None,
-                            });
-                            sample.insert(name.to_string(), serde_json::Value::Bool(*v));
-                            mask
-                        });
-                    content = content.replace(&format!("{name:?}"), &format!("{mask:?}"));
-                    exemplar[mask.clone()] = serde_json::Value::Bool(*v);
-                    required.push(mask.clone());
-                    properties[mask.clone()] = bool::json_schema();
-                    let name = name.to_string();
-                    let default = *default;
-                    let is_true = *v;
-                    let on_conflict = *on_conflict;
-                    masks.push((
+                    let mask = self.mask_gen.generate();
+                    masks.push(mask.clone());
+                    bool_masks.push(BoolMask::new(
+                        self.policy_index,
+                        name.clone(),
                         mask.clone(),
-                        Box::new(move |report, reported| {
-                            if let serde_json::Value::Bool(ret) = reported {
-                                if ret == is_true {
-                                    report.report_bool(&name, ret, on_conflict);
-                                } else {
-                                    report.report_bool_default(&name, default);
-                                }
-                            } else {
-                                report.report_type_check_failure(
-                                    file!(),
-                                    line!(),
-                                    &format!("expected boolean for {name}"),
-                                );
-                            }
-                        }),
+                        *default,
+                        *v,
+                        *on_conflict,
                     ));
+                    self.default_return[mask.clone()] = (!*v).into();
+                    content = content.replace(&format!("{name:?}"), &format!("{mask:?}"));
+                    required.push(mask.clone());
+                    properties[mask] = bool::json_schema();
                 }
                 Field::Number {
                     name,
                     default,
                     on_conflict,
                 } => {
-                    let mask = self
-                        .number_mask
-                        .entry(name.to_string())
-                        .or_insert_with(|| self.mask_gen.generate());
-                    content = content.replace(&format!("{name:?}"), &format!("{mask:?}"));
-                    sample.insert(name.to_string(), value.clone());
-                    exemplar[mask.clone()] = serde_json::Value::Null;
-                    required.push(mask.clone());
-                    properties[mask.clone()] = f64::json_schema();
-                    let name = name.clone();
-                    let default = *default;
-                    let on_conflict = *on_conflict;
-                    masks.push((
+                    let serde_json::Value::Number(v) = value else {
+                        return Err(PolicyError::ExpectedNumber {
+                            field_name: name.clone(),
+                        });
+                    };
+                    let mask = self.mask_gen.generate();
+                    masks.push(mask.clone());
+                    number_masks.push(NumberMask::new(
+                        self.policy_index,
+                        name.clone(),
                         mask.clone(),
-                        Box::new(move |report, reported| {
-                            if let serde_json::Value::Number(n) = reported {
-                                report.report_number(&name, n, on_conflict);
-                            } else {
-                                report.report_type_check_failure(
-                                    file!(),
-                                    line!(),
-                                    &format!("expected number for {name}"),
-                                );
-                            }
-                            if let Some(default) = default {
-                                if let Some(default) = serde_json::Number::from_f64(default.0) {
-                                    report.report_number_default(&name, default);
-                                } else {
-                                    report.report_invariant_violation(
-                                        file!(),
-                                        line!(),
-                                        "cannot cast to number",
-                                    );
-                                }
-                            }
-                        }),
+                        *default,
+                        v.clone(),
+                        *on_conflict,
                     ));
+                    self.default_return[mask.clone()] = serde_json::Value::Number(v.clone());
+                    content = content.replace(&format!("{name:?}"), &format!("{mask:?}"));
+                    required.push(mask.clone());
+                    properties[mask] = f64::json_schema();
                 }
                 Field::String {
                     name,
                     default,
                     on_conflict,
                 } => {
-                    let mask = self
-                        .string_mask
-                        .entry(name.to_string())
-                        .or_insert_with(|| self.mask_gen.generate());
                     let serde_json::Value::String(v) = value else {
-                        todo!();
+                        return Err(PolicyError::ExpectedString {
+                            field_name: name.clone(),
+                        });
                     };
-                    content = content.replace(&format!("{name:?}"), &format!("{mask:?}"));
-                    sample.insert(name.to_string(), value.clone());
-                    exemplar[mask.clone()] = serde_json::Value::String(v.clone());
-                    required.push(mask.clone());
-                    properties[mask.clone()] = String::json_schema();
-                    let name = name.clone();
-                    let default = default.clone();
-                    let on_conflict = *on_conflict;
-                    masks.push((
+                    let mask = self.mask_gen.generate();
+                    masks.push(mask.clone());
+                    string_masks.push(StringMask::new(
+                        self.policy_index,
+                        name.clone(),
                         mask.clone(),
-                        Box::new(move |report, reported| {
-                            if let serde_json::Value::String(s) = reported {
-                                report.report_string(&name, s, on_conflict);
-                            } else {
-                                report.report_type_check_failure(
-                                    file!(),
-                                    line!(),
-                                    &format!("expected string for {name}"),
-                                );
-                            }
-                            if let Some(default) = &default {
-                                report.report_string_default(&name, default);
-                            }
-                        }),
+                        default.clone(),
+                        v.clone(),
+                        *on_conflict,
                     ));
+                    self.default_return[mask.clone()] = serde_json::Value::String(v.clone());
+                    content = content.replace(&format!("{name:?}"), &format!("{mask:?}"));
+                    required.push(mask.clone());
+                    properties[mask] = f64::json_schema();
+                }
+                Field::StringArray { name } => {
+                    let serde_json::Value::Array(v) = value else {
+                        return Err(PolicyError::ExpectedString {
+                            field_name: name.clone(),
+                        });
+                    };
+                    let mut strings = vec![];
+                    for v in v {
+                        if let serde_json::Value::String(v) = v {
+                            strings.push(v.clone());
+                        } else {
+                            todo!();
+                        }
+                    }
+                    let mask = self.mask_gen.generate();
+                    masks.push(mask.clone());
+                    string_array_masks.push(StringArrayMask::new(
+                        self.policy_index,
+                        name.clone(),
+                        mask.clone(),
+                        strings,
+                    ));
+                    self.default_return[mask.clone()] = serde_json::Value::Array(vec![]);
+                    content = content.replace(&format!("{name:?}"), &format!("{mask:?}"));
+                    required.push(mask.clone());
+                    properties[mask] = Vec::<String>::json_schema();
                 }
                 Field::StringEnum {
                     name,
@@ -962,123 +1268,27 @@ impl ReportBuilder {
                     default,
                     on_conflict,
                 } => {
-                    for v in values {
-                        if v != value {
-                            continue;
-                        }
-                        let mask = self
-                            .string_enum_mask
-                            .entry((name.to_string(), v.to_string()))
-                            .or_insert_with(|| {
-                                let mask = self.mask_gen.generate();
-                                pre_messages.push(ChatMessage {
-                                    role: "system".to_string(),
-                                    content: format!("Unless specified by a matching rule, output {{{mask:?}: false}}."),
-                                    images: None,
-                                    tool_calls: None,
-                                });
-                                mask
-                            });
-                        exemplar[mask.clone()] = true.into();
-                        required.push(mask.clone());
-                        properties[mask.clone()] = bool::json_schema();
-                        content = content.replace(&format!("{name:?}"), &format!("{mask:?}"));
-                        content = content.replace(&format!("{v:?}"), "true");
-                        let name = name.clone();
-                        let default = default.clone();
-                        let values = values.clone();
-                        let on_conflict = *on_conflict;
-                        let v = v.clone();
-                        masks.push((
-                            mask.to_string(),
-                            Box::new(move |report, reported| {
-                                if let serde_json::Value::Bool(true) = reported {
-                                    report.report_string_enum(
-                                        &name,
-                                        v.clone(),
-                                        &values,
-                                        on_conflict,
-                                    );
-                                } else {
-                                    report.report_type_check_failure(
-                                        file!(),
-                                        line!(),
-                                        &format!("expected string for {name}"),
-                                    );
-                                }
-                                if let Some(default) = &default {
-                                    report.report_string_default(&name, default);
-                                }
-                            }),
-                        ));
-                    }
-                }
-                Field::StringArray { name } => {
-                    let mask = self
-                        .string_array_mask
-                        .entry(name.to_string())
-                        .or_insert_with(|| self.mask_gen.generate());
-                    content = content.replace(&format!("{name:?}"), &format!("{mask:?}"));
-                    sample.insert(name.to_string(), value.clone());
-                    exemplar[mask.clone()] = value.clone();
-                    required.push(mask.clone());
-                    properties[mask.clone()] = Vec::<String>::json_schema();
-                    let name = name.clone();
-                    masks.push((
+                    let Some(v) = values.iter().find(|x| *x == value) else {
+                        todo!();
+                    };
+                    let mask = self.mask_gen.generate();
+                    masks.push(mask.clone());
+                    string_enum_masks.push(StringEnumMask::new(
+                        self.policy_index,
+                        name.clone(),
                         mask.clone(),
-                        Box::new(move |report, reported| {
-                            fn extract_strings(
-                                value: &serde_json::Value,
-                                depth: usize,
-                            ) -> Option<Vec<String>> {
-                                if depth == 0 {
-                                    None
-                                } else if let serde_json::Value::String(s) = value {
-                                    Some(vec![s.clone()])
-                                } else if let serde_json::Value::Array(a) = value {
-                                    let mut all = vec![];
-                                    for v in a {
-                                        all.extend(extract_strings(v, depth - 1)?.into_iter());
-                                    }
-                                    Some(all)
-                                } else {
-                                    None
-                                }
-                            }
-                            match extract_strings(&reported, 128) {
-                                Some(strings) => {
-                                    for s in strings {
-                                        report.report_string_array(&name, s);
-                                    }
-                                }
-                                None => {
-                                    report.report_type_check_failure(
-                                        file!(),
-                                        line!(),
-                                        &format!("expected [string] for {name}"),
-                                    );
-                                }
-                            }
-                        }),
+                        default.clone(),
+                        v.clone(),
+                        *on_conflict,
                     ));
+                    self.default_return[mask.clone()] = false.into();
+                    content = content.replace(&format!("{name:?}"), &format!("{mask:?}"));
+                    content = content.replace(&format!("{v:?}"), "true");
+                    required.push(mask.clone());
+                    properties[mask] = bool::json_schema();
                 }
             }
         }
-        for (key, returned) in sample.iter() {
-            let expected = policy.action.get(key);
-            if expected != Some(returned) {
-                let field = key.clone();
-                let expected = expected.cloned();
-                let returned = Some(returned.clone());
-                return Err(PolicyError::Inconsistent {
-                    field,
-                    expected,
-                    returned,
-                });
-            }
-        }
-        self.masks.extend(masks);
-        self.messages.extend(pre_messages);
         self.messages.push(ChatMessage {
             role: "system".to_string(),
             content: content.clone(),
@@ -1088,38 +1298,43 @@ impl ReportBuilder {
         self.policy_index += 1;
         self.required = required;
         self.properties = properties;
+        self.bool_masks = bool_masks;
+        self.number_masks = number_masks;
+        self.string_masks = string_masks;
+        self.string_array_masks = string_array_masks;
+        self.string_enum_masks = string_enum_masks;
+        self.masks_by_index = masks_by_index;
         Ok(())
     }
 
     fn consume_ir(self, ir: serde_json::Value) -> Result<Report, ApplyError> {
         let mut report = Report {
             messages: self.messages,
-            bool_mask: self
-                .bool_mask
-                .into_iter()
-                .map(|(k, v)| (v, format!("{}::{}", k.0, k.1)))
-                .collect(),
-            number_mask: self.number_mask.into_iter().map(|(k, v)| (v, k)).collect(),
-            string_mask: self.string_mask.into_iter().map(|(k, v)| (v, k)).collect(),
-            string_array_mask: self
-                .string_array_mask
-                .into_iter()
-                .map(|(k, v)| (v, k))
-                .collect(),
-            string_enum_mask: self
-                .string_enum_mask
-                .into_iter()
-                .map(|(k, v)| (v, format!("{}::{}", k.0, k.1)))
-                .collect(),
+            bool_masks: self.bool_masks,
+            number_masks: self.number_masks,
+            string_masks: self.string_masks,
+            string_array_masks: self.string_array_masks,
+            string_enum_masks: self.string_enum_masks,
+            masks_by_index: self.masks_by_index,
+            rules_matched: vec![],
             ir: Some(ir.clone()),
             default: None,
             value: None,
         };
-        for (mask, action) in self.masks.iter() {
-            let Some(value) = ir.get(mask) else {
-                return Err(ApplyError::Conflict(Conflict::TODO));
-            };
-            action(&mut report, value.clone());
+        for m in report.bool_masks.clone().into_iter() {
+            m.apply_to(&ir, &mut report);
+        }
+        for m in report.number_masks.clone().into_iter() {
+            m.apply_to(&ir, &mut report);
+        }
+        for m in report.string_masks.clone().into_iter() {
+            m.apply_to(&ir, &mut report);
+        }
+        for m in report.string_array_masks.clone().into_iter() {
+            m.apply_to(&mut report);
+        }
+        for m in report.string_enum_masks.clone().into_iter() {
+            m.apply_to(&mut report);
         }
         Ok(report)
     }
@@ -1142,20 +1357,21 @@ impl Default for ReportBuilder {
         ReportBuilder {
             mask_index: 1,
             mask_gen: MaskGenerator::default(),
-            bool_mask: HashMap::default(),
-            number_mask: HashMap::default(),
-            string_mask: HashMap::default(),
-            string_array_mask: HashMap::default(),
-            string_enum_mask: HashMap::default(),
-            masks: vec![],
+            bool_masks: vec![],
+            number_masks: vec![],
+            string_masks: vec![],
+            string_array_masks: vec![],
+            string_enum_masks: vec![],
+            masks_by_index: vec![],
+            default_return: serde_json::json! {{}},
             messages: vec![],
             policy_index: 1,
             required: vec![
-                "__matched_rules__".to_string(),
+                "__rule_numbers__".to_string(),
                 "__justification__".to_string(),
             ],
             properties: serde_json::json! {{
-                "__matched_rules__": Vec::<f64>::json_schema(),
+                "__rule_numbers__": Vec::<f64>::json_schema(),
                 "__justification__": String::json_schema(),
             }},
         }
@@ -1175,6 +1391,7 @@ pub enum ApplyError {
     Policy(PolicyError),
     Yammer(yammer::Error),
     Conflict(Conflict),
+    TooManyIterations,
 }
 
 impl From<PolicyError> for ApplyError {
@@ -1220,18 +1437,96 @@ impl Manager {
         &mut self,
         host: Option<String>,
         template: yammer::ChatRequest,
-        prompt: &str,
+        unstructured_data: &str,
     ) -> Result<Report, ApplyError> {
-        let (report, req) = self.request_for(template, prompt).await?;
-        let resp = req
-            .make_request(&ollama_host(host))
-            .send()
-            .await?
-            .error_for_status()?
-            .json::<yammer::ChatResponse>()
-            .await?;
-        let ir: serde_json::Value = serde_json::from_str(&resp.message.content)?;
-        report.consume_ir(ir)
+        let (report, mut req) = self.request_for(template, unstructured_data).await?;
+        for _ in 0..3 {
+            let resp = req
+                .make_request(&ollama_host(host.clone()))
+                .send()
+                .await?
+                .error_for_status()?
+                .json::<yammer::ChatResponse>()
+                .await?;
+            let mut ir: serde_json::Value = serde_json::from_str(&resp.message.content)?;
+            let Some(reportedly_matched) = ir.get("__rule_numbers__").cloned() else {
+                continue;
+            };
+            let Some(mut reportedly_matched): Option<Vec<usize>> =
+                serde_json::from_value(reportedly_matched).ok()
+            else {
+                continue;
+            };
+            let report = report.clone().consume_ir(ir.clone())?;
+            let mut empirically_matched = report.rules_matched.clone();
+            empirically_matched.sort();
+            empirically_matched.dedup();
+            reportedly_matched.sort();
+            reportedly_matched.dedup();
+            if *empirically_matched == reportedly_matched {
+                return Ok(report);
+            }
+            let empirical_but_not_reported = empirically_matched
+                .iter()
+                .filter(|x| !reportedly_matched.iter().any(|y| **x == *y))
+                .cloned()
+                .collect::<Vec<_>>();
+            let reported_but_not_empirical = reportedly_matched
+                .iter()
+                .filter(|x| !empirically_matched.iter().any(|y| **x == *y))
+                .cloned()
+                .collect::<Vec<_>>();
+            ir["__justification__"] = "<omitted>".to_string().into();
+            req.messages.push(ChatMessage {
+                role: "assistant".to_string(),
+                content: format!("```json\n{}\n```\n", serde_json::to_string(&ir).unwrap()),
+                images: None,
+                tool_calls: None,
+            });
+            let mut content =
+                "Your output is inconsistent and I reject it with a request for you to try again."
+                    .to_string();
+            if !empirical_but_not_reported.is_empty() {
+                content += "\n\nYou took action on the following rules but did not report them in \"__rule_numbers__\":\n";
+                for rule_number in empirical_but_not_reported.into_iter() {
+                    if rule_number > 0 && rule_number <= report.masks_by_index.len() {
+                        content += &format!(
+                            "- Rule {}: Either change {:?} to a different value or append {} to \"__rule_numbers__\".\n",
+                            rule_number,
+                            report.masks_by_index[rule_number - 1],
+                            rule_number
+                        );
+                    } else {
+                        content += "- Rule number {} doesn't exist.\n";
+                    }
+                }
+            }
+            if !reported_but_not_empirical.is_empty() {
+                content += "\n\nYou reported the following rules but did not perform their associated actions:\n";
+                for rule_number in reported_but_not_empirical.into_iter() {
+                    if rule_number > 0 && rule_number <= report.masks_by_index.len() {
+                        content += &format!(
+                            "- Rule {}: Either change {:?} or remove {} from \"__rule_numbers__\".\n",
+                            rule_number,
+                            report.masks_by_index[rule_number - 1],
+                            rule_number
+                        );
+                    } else {
+                        content += "- Rule number {} doesn't exist.\n";
+                    }
+                }
+            }
+            content += "
+Please correct all mistakes and output the entire, corrected object as JSON.
+Do not simply return your previous answer because I will reject it and ask you to try again.";
+            req.messages.push(ChatMessage {
+                role: "user".to_string(),
+                content,
+                images: None,
+                tool_calls: None,
+            });
+        }
+        Err(ApplyError::TooManyIterations)
     }
 
     pub async fn request_for(
@@ -1239,35 +1534,58 @@ impl Manager {
         template: yammer::ChatRequest,
         prompt: &str,
     ) -> Result<(ReportBuilder, yammer::ChatRequest), ApplyError> {
-        let mut req = template;
-        req.messages = vec![ChatMessage {
-            role: "system".to_string(),
-            content: r#"
-You are tasked with extracting JSON from UNSTRUCTURED DATA.
-
-You will be provided with a series of rules that say something about
-UNSTRUCTURED DATA.  When the statement matches, output the specified output
-value.  Otherwise output the specified default value.
-
-Requirements:
-- Evaluate each rule in isolation given UNSTRUCTURED DATA.
-- Output rules that match in the "__matched_rules__" array.
-- Output a plaintext justification of your decision in "__justification__".
-- Compare the outputs chosen to rules in the "__matched_rules__" array.
-- Loose alignment is not enough unless explicitly allowed by a rule in reference to itself.
-"#
-            .to_string(),
-            images: None,
-            tool_calls: None,
-        }];
         let mut report = ReportBuilder::default();
         for policy in self.policies.iter() {
             report.add_policy(policy)?;
         }
+        let mut req = template;
+        req.messages = vec![
+            ChatMessage {
+                role: "system".to_string(),
+                content: r#"
+You are tasked with extracting structure from unstructured data.
+
+You will be provided a series of rules specifying criteria about UNSTRUCTURED DATA.
+For each rule, there are zero or more associated outputs.
+
+Respond in JSON.
+
+Detailed Instructions:
+1.  Locate all default instructions and prepare to follow them.
+2.  For each instruction below, consider it carefully.
+    a.  For Rules:  Check that the rule's criteria describes UNSTRUCTURED DATA.
+        i.  If the rule describes UNSTRUCTURED DATA, decide how to output the fact that the rule
+            matches.  The instructions and instructions alone portray this information.
+            Output the associated output.  Add the output to the __rule_numbers__.
+        ii. If the rule does not describe UNSTRUCTURED DATA, do not follow any instructions
+            pertaning to the rule.
+3.  Multiple rules may match.  Repeat instruction 2 until no further changes.
+4.  It's possible to miss rules that apply.  Double check your work by following steps 1-3 again.
+5.  Prepare the Justification field.  This should include a justification for each rule of why it
+    was or was not matched.
+6.  Output the final result as JSON.
+"#
+                .to_string(),
+                images: None,
+                tool_calls: None,
+            },
+            ChatMessage {
+                role: "system".to_string(),
+                content: format!(
+                    "Unless overridden, output {}",
+                    serde_json::to_string(&report.default_return).unwrap()
+                ),
+                images: None,
+                tool_calls: None,
+            },
+        ];
         req.messages.extend(report.messages());
         req.messages.push(ChatMessage {
             role: "system".to_string(),
-            content: "Consider each of the above rules three times.  For each rule, consider whether it applies in isolation.  If so, take the specified action embedded within the rule.".to_string(),
+            content: "Consider each of the above rules' criteria three times.
+For each rule, consider whether the criteria applies in isolation and without consider of other rules.
+" 
+                .to_string(),
             images: None,
             tool_calls: None,
         });
@@ -1460,13 +1778,15 @@ mod tests {
             .apply(
                 None,
                 yammer::ChatRequest {
-                    model: "phi4".to_string(),
+                    model: "phi4:14b-fp16".to_string(),
                     format: None,
                     keep_alive: None,
                     messages: vec![],
                     tools: None,
                     stream: None,
-                    options: serde_json::json! {{}},
+                    options: serde_json::json! {{
+                        "num_ctx": 16_000,
+                    }},
                 },
                 r#"From: robert@example.org
 To: jeff@example.org
