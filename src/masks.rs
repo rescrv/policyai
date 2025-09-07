@@ -124,7 +124,7 @@ pub struct NumberMask {
     /// Default value when the field is not present
     pub default: Option<t64>,
     /// Expected numeric value for this policy rule
-    pub value: serde_json::Number,
+    pub value: Option<serde_json::Number>,
     /// Strategy for resolving conflicts when multiple policies set different values
     pub on_conflict: OnConflict,
 }
@@ -150,7 +150,7 @@ impl NumberMask {
     ///     "priority".to_string(),
     ///     "field_xyz789".to_string(),
     ///     Some(t64(0.0)),
-    ///     serde_json::Number::from(42),
+    ///     Some(serde_json::Number::from(42)),
     ///     OnConflict::LargestValue
     /// );
     /// ```
@@ -159,7 +159,7 @@ impl NumberMask {
         name: String,
         mask: String,
         default: Option<t64>,
-        value: serde_json::Number,
+        value: Option<serde_json::Number>,
         on_conflict: OnConflict,
     ) -> Self {
         Self {
@@ -187,7 +187,7 @@ impl NumberMask {
     /// ```
     /// # use policyai::{NumberMask, OnConflict, Report, t64};
     /// # use claudius::MessageParam;
-    /// let mask = NumberMask::new(1, "score".to_string(), "field_num".to_string(), Some(t64(0.0)), serde_json::Number::from(42), OnConflict::Default);
+    /// let mask = NumberMask::new(1, "score".to_string(), "field_num".to_string(), Some(t64(0.0)), Some(serde_json::Number::from(42)), OnConflict::Default);
     /// let ir = serde_json::json!({"field_num": 42});
     /// let mut report = Report::new(vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
     /// mask.apply_to(&ir, &mut report);
@@ -195,12 +195,29 @@ impl NumberMask {
     pub fn apply_to(&self, ir: &serde_json::Value, report: &mut Report) {
         match ir.get(&self.mask) {
             Some(serde_json::Value::Number(value)) => {
-                report.report_number(
-                    self.policy_index,
-                    &self.name,
-                    value.clone(),
-                    self.on_conflict,
-                );
+                if let Some(expected_value) = &self.value {
+                    if value == expected_value {
+                        report.report_number(
+                            self.policy_index,
+                            &self.name,
+                            value.clone(),
+                            self.on_conflict,
+                        );
+                    } else {
+                        report.report_number_conflict(
+                            &self.name,
+                            value.clone(),
+                            expected_value.clone(),
+                        );
+                    }
+                } else {
+                    report.report_number(
+                        self.policy_index,
+                        &self.name,
+                        value.clone(),
+                        self.on_conflict,
+                    );
+                }
             }
             Some(_) => {
                 report.report_type_check_failure(
@@ -243,7 +260,7 @@ pub struct StringMask {
     /// Default value when the field is not present
     pub default: Option<String>,
     /// Expected string value for this policy rule
-    pub value: String,
+    pub value: Option<String>,
     /// Strategy for resolving conflicts when multiple policies set different values
     pub on_conflict: OnConflict,
 }
@@ -269,7 +286,7 @@ impl StringMask {
     ///     "category".to_string(),
     ///     "field_str456".to_string(),
     ///     Some("default".to_string()),
-    ///     "urgent".to_string(),
+    ///     Some("urgent".to_string()),
     ///     OnConflict::Agreement
     /// );
     /// ```
@@ -278,7 +295,7 @@ impl StringMask {
         name: String,
         mask: String,
         default: Option<String>,
-        value: String,
+        value: Option<String>,
         on_conflict: OnConflict,
     ) -> Self {
         Self {
@@ -306,7 +323,7 @@ impl StringMask {
     /// ```
     /// # use policyai::{StringMask, OnConflict, Report};
     /// # use claudius::MessageParam;
-    /// let mask = StringMask::new(1, "title".to_string(), "field_str".to_string(), None, "important".to_string(), OnConflict::Default);
+    /// let mask = StringMask::new(1, "title".to_string(), "field_str".to_string(), None, Some("important".to_string()), OnConflict::Default);
     /// let ir = serde_json::json!({"field_str": "important"});
     /// let mut report = Report::new(vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
     /// mask.apply_to(&ir, &mut report);
@@ -314,12 +331,29 @@ impl StringMask {
     pub fn apply_to(&self, ir: &serde_json::Value, report: &mut Report) {
         match ir.get(&self.mask) {
             Some(serde_json::Value::String(value)) => {
-                report.report_string(
-                    self.policy_index,
-                    &self.name,
-                    value.clone(),
-                    self.on_conflict,
-                );
+                if let Some(expected_value) = &self.value {
+                    if value == expected_value {
+                        report.report_string(
+                            self.policy_index,
+                            &self.name,
+                            value.clone(),
+                            self.on_conflict,
+                        );
+                    } else {
+                        report.report_string_conflict(
+                            &self.name,
+                            value.clone(),
+                            expected_value.clone(),
+                        );
+                    }
+                } else {
+                    report.report_string(
+                        self.policy_index,
+                        &self.name,
+                        value.clone(),
+                        self.on_conflict,
+                    );
+                }
             }
             Some(_) => {
                 report.report_type_check_failure(
@@ -452,7 +486,7 @@ pub struct StringEnumMask {
     /// Masked field name unlikely to be in LLM training data
     pub mask: String,
     /// The specific enum value this mask represents
-    pub value: String,
+    pub value: Option<String>,
     /// Default enum value when the field is not present
     pub default: Option<String>,
     /// Strategy for resolving conflicts when multiple policies set different values
@@ -479,7 +513,7 @@ impl StringEnumMask {
     ///     1,
     ///     "status".to_string(),
     ///     "field_enum456".to_string(),
-    ///     "active".to_string(),
+    ///     Some("active".to_string()),
     ///     Some("inactive".to_string()),
     ///     OnConflict::LargestValue
     /// );
@@ -488,7 +522,7 @@ impl StringEnumMask {
         policy_index: usize,
         name: String,
         mask: String,
-        value: String,
+        value: Option<String>,
         default: Option<String>,
         on_conflict: OnConflict,
     ) -> Self {
@@ -518,7 +552,7 @@ impl StringEnumMask {
     /// ```
     /// # use policyai::{StringEnumMask, OnConflict, Report};
     /// # use claudius::MessageParam;
-    /// let mask = StringEnumMask::new(1, "priority".to_string(), "field_enum".to_string(), "high".to_string(), None, OnConflict::Default);
+    /// let mask = StringEnumMask::new(1, "priority".to_string(), "field_enum".to_string(), Some("high".to_string()), None, OnConflict::Default);
     /// let ir = serde_json::json!({"field_enum": true});
     /// let mut report = Report::new(vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
     /// mask.apply_to(&ir, &mut report);
@@ -527,12 +561,22 @@ impl StringEnumMask {
         match ir.get(&self.mask) {
             Some(serde_json::Value::Bool(value)) => {
                 if *value {
-                    report.report_string_enum(
-                        self.policy_index,
-                        &self.name,
-                        self.value.clone(),
-                        self.on_conflict,
-                    );
+                    if let Some(enum_value) = &self.value {
+                        report.report_string_enum(
+                            self.policy_index,
+                            &self.name,
+                            enum_value.clone(),
+                            self.on_conflict,
+                        );
+                    } else {
+                        report.report_string_enum_conflict(
+                            &self.name,
+                            value.to_string(),
+                            "null".to_string(),
+                        );
+                    }
+                } else if let Some(default) = self.default.as_ref() {
+                    report.report_string_default(&self.name, default);
                 }
             }
             Some(_) => {

@@ -700,7 +700,17 @@ impl Report {
         });
     }
 
-    fn report_number_conflict(
+    /// Report a conflict between two numeric values for the same field.
+    ///
+    /// Records a conflict when multiple policies specify different numeric values
+    /// for the same field, enabling conflict detection and resolution reporting.
+    ///
+    /// # Arguments
+    ///
+    /// * `field` - The name of the field experiencing the conflict
+    /// * `val1` - The first conflicting numeric value
+    /// * `val2` - The second conflicting numeric value
+    pub fn report_number_conflict(
         &mut self,
         field: &str,
         val1: serde_json::Number,
@@ -713,7 +723,36 @@ impl Report {
         });
     }
 
-    fn report_string_conflict(&mut self, field: &str, val1: String, val2: String) {
+    /// Report a conflict between two string values for the same field.
+    ///
+    /// Records a conflict when multiple policies specify different string values
+    /// for the same field, enabling conflict detection and resolution reporting.
+    ///
+    /// # Arguments
+    ///
+    /// * `field` - The name of the field experiencing the conflict
+    /// * `val1` - The first conflicting string value
+    /// * `val2` - The second conflicting string value
+    pub fn report_string_conflict(&mut self, field: &str, val1: String, val2: String) {
+        self.conflicts.push(Conflict::StringConflict {
+            field: field.to_string(),
+            val1,
+            val2,
+        });
+    }
+
+    /// Report a conflict between a boolean flag and expected enum value.
+    ///
+    /// Records a conflict when a string enum field receives a boolean value
+    /// that doesn't match the expected enum value, enabling conflict detection
+    /// and resolution reporting.
+    ///
+    /// # Arguments
+    ///
+    /// * `field` - The name of the field experiencing the conflict
+    /// * `val1` - The existing string value from the report
+    /// * `val2` - The expected enum string value
+    pub fn report_string_enum_conflict(&mut self, field: &str, val1: String, val2: String) {
         self.conflicts.push(Conflict::StringConflict {
             field: field.to_string(),
             val1,
