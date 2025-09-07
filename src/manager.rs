@@ -14,18 +14,37 @@ use crate::{ApplyError, Policy, Report, ReportBuilder, Usage};
 ///
 /// # Example
 ///
-/// ```ignore
-/// use policyai::{Manager, Policy};
+/// ```no_run
+/// use policyai::Manager;
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// # use claudius::{Anthropic, MessageCreateParams, KnownModel, Model, MessageParam, MessageRole};
+/// # use policyai::{PolicyType, Policy, Usage};
 ///
 /// let mut manager = Manager::default();
-/// manager.add(policy1);
-/// manager.add(policy2);
+/// # let client = Anthropic::new(None)?;
+/// # let policy_type = PolicyType::parse("type TestPolicy { active: bool = true }")?;
+/// # let policy = Policy {
+/// #     r#type: policy_type,
+/// #     prompt: "Test policy".to_string(),
+/// #     action: serde_json::json!({}),
+/// # };
+/// manager.add(policy);
 ///
+/// # let template = MessageCreateParams {
+/// #     max_tokens: 1024,
+/// #     model: Model::Known(KnownModel::ClaudeSonnet40),
+/// #     messages: vec![],
+/// #     ..Default::default()
+/// # };
+/// # let mut usage = Some(Usage::default());
 /// let report = manager.apply(
 ///     &client,
 ///     template,
-///     "unstructured text data"
+///     "unstructured text data",
+///     &mut usage
 /// ).await?;
+/// # Ok(())
+/// # }
 /// ```
 #[derive(Debug, Default)]
 pub struct Manager {

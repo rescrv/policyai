@@ -21,7 +21,8 @@ impl PolicyType {
     /// Parse a PolicyType from its textual representation.
     ///
     /// # Example
-    /// ```ignore
+    /// ```
+    /// use policyai::PolicyType;
     /// let policy_type = PolicyType::parse("type MyPolicy { unread: bool = true }").unwrap();
     /// ```
     pub fn parse(input: &str) -> Result<Self, ParseError> {

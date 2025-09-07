@@ -14,7 +14,7 @@
 //!
 //! # Example
 //!
-//! ```ignore
+//! ```
 //! use policyai::{PolicyType, Field, OnConflict, Manager};
 //!
 //! let policy_type = PolicyType {
