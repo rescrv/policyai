@@ -16,12 +16,12 @@ fn main() {
             let _policy: Policy = match serde_json::from_str(&line) {
                 Ok(policy) => policy,
                 Err(err) => {
-                    eprintln!("error parsing policy {}: {}", line, err);
+                    eprintln!("error parsing policy {line}: {err}");
                     continue;
                 }
             };
             verified += 1;
         }
     }
-    eprintln!("verified {} policies", verified);
+    eprintln!("verified {verified} policies");
 }

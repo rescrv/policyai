@@ -1,660 +1,812 @@
-use std::fmt::{Formatter, Write};
-
-use nom::{
-    branch::alt,
-    bytes::complete::{escaped, tag},
-    character::complete::{alpha1, alphanumeric1, digit1, multispace0, none_of, one_of},
-    combinator::{all_consuming, cut, map, map_res, opt, recognize},
-    error::{context, VerboseError, VerboseErrorKind},
-    multi::{many0_count, separated_list1},
-    sequence::{delimited, pair, terminated, tuple},
-    IResult, Offset,
-};
+use std::fmt;
 
 use crate::{t64, Field, OnConflict, PolicyType};
 
-////////////////////////////////////////// error handling //////////////////////////////////////////
-
-type ParseResult<'a, T> = IResult<&'a str, T, VerboseError<&'a str>>;
-
-#[derive(Clone, Eq, PartialEq)]
-pub struct ParseError {
-    string: String,
+#[derive(Debug, Clone, PartialEq)]
+pub struct Position {
+    pub line: usize,
+    pub column: usize,
 }
 
-impl std::fmt::Debug for ParseError {
-    fn fmt(&self, fmt: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
-        writeln!(fmt, "{}", self.string)
+impl Position {
+    fn new(line: usize, column: usize) -> Self {
+        Self { line, column }
     }
 }
 
-impl std::fmt::Display for ParseError {
-    fn fmt(&self, fmt: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
-        writeln!(fmt, "{}", self.string)
-    }
+#[derive(Debug, Clone, PartialEq)]
+pub enum ParseError {
+    UnexpectedToken {
+        expected: String,
+        found: String,
+        position: Position,
+    },
+    UnexpectedEndOfInput {
+        expected: String,
+        position: Position,
+    },
+    InvalidIdentifier {
+        reason: String,
+        position: Position,
+    },
+    InvalidStringLiteral {
+        reason: String,
+        position: Position,
+    },
+    InvalidNumber {
+        reason: String,
+        position: Position,
+    },
+    DuplicateFieldName {
+        name: String,
+        position: Position,
+    },
+    Custom {
+        message: String,
+        position: Position,
+    },
 }
 
-impl From<String> for ParseError {
-    fn from(string: String) -> Self {
-        Self { string }
-    }
-}
-
-pub fn interpret_verbose_error(input: &'_ str, err: VerboseError<&'_ str>) -> ParseError {
-    let mut result = String::new();
-    let mut index = 0;
-    for (substring, kind) in err.errors.iter() {
-        let offset = input.offset(substring);
-        let prefix = &input.as_bytes()[..offset];
-        // Count the number of newlines in the first `offset` bytes of input
-        let line_number = prefix.iter().filter(|&&b| b == b'\n').count() + 1;
-        // Find the line that includes the subslice:
-        // Find the *last* newline before the substring starts
-        let line_begin = prefix
-            .iter()
-            .rev()
-            .position(|&b| b == b'\n')
-            .map(|pos| offset - pos)
-            .unwrap_or(0);
-        // Find the full line after that newline
-        let line = input[line_begin..]
-            .lines()
-            .next()
-            .unwrap_or(&input[line_begin..])
-            .trim_end();
-        // The (1-indexed) column number is the offset of our substring into that line
-        let column_number = line.offset(substring) + 1;
-        match kind {
-            VerboseErrorKind::Char(c) => {
-                if let Some(actual) = substring.chars().next() {
-                    write!(
-                        &mut result,
-                        "{index}: at line {line_number}:\n\
-                 {line}\n\
-                 {caret:>column$}\n\
-                 expected '{expected}', found {actual}\n\n",
-                        index = index,
-                        line_number = line_number,
-                        line = line,
-                        caret = '^',
-                        column = column_number,
-                        expected = c,
-                        actual = actual,
-                    )
-                    .unwrap();
-                } else {
-                    write!(
-                        &mut result,
-                        "{index}: at line {line_number}:\n\
-                 {line}\n\
-                 {caret:>column$}\n\
-                 expected '{expected}', got end of input\n\n",
-                        index = index,
-                        line_number = line_number,
-                        line = line,
-                        caret = '^',
-                        column = column_number,
-                        expected = c,
-                    )
-                    .unwrap();
-                }
-                index += 1;
-            }
-            VerboseErrorKind::Context(s) => {
+impl fmt::Display for ParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ParseError::UnexpectedToken {
+                expected,
+                found,
+                position,
+            } => {
                 write!(
-                    &mut result,
-                    "{index}: at line {line_number}, in {context}:\n\
-               {line}\n\
-               {caret:>column$}\n\n",
-                    index = index,
-                    line_number = line_number,
-                    context = s,
-                    line = line,
-                    caret = '^',
-                    column = column_number,
+                    f,
+                    "at line {}:{}: expected {expected}, found '{found}'",
+                    position.line, position.column
                 )
-                .unwrap();
-                index += 1;
             }
-            // Swallow these.   They are ugly.
-            VerboseErrorKind::Nom(_) => {}
-        };
-    }
-    ParseError {
-        string: result.trim().to_string(),
-    }
-}
-
-///////////////////////////////////////////// TableSet /////////////////////////////////////////////
-
-pub fn identifier(input: &str) -> ParseResult<String> {
-    context(
-        "identifier",
-        map(
-            recognize(pair(
-                alt((alpha1, tag("_"))),
-                many0_count(alt((alphanumeric1, tag("_")))),
-            )),
-            |ident: &str| ident.to_string(),
-        ),
-    )(input)
-}
-
-pub fn unescape(input: &str) -> String {
-    let mut out: Vec<char> = Vec::new();
-    let mut prev_was_escape = false;
-    for c in input.chars() {
-        if prev_was_escape && (c == '\"' || c == '\\') {
-            out.push(c);
-            prev_was_escape = false;
-        } else if c == '\\' {
-            prev_was_escape = true;
-        } else {
-            out.push(c);
+            ParseError::UnexpectedEndOfInput { expected, position } => {
+                write!(
+                    f,
+                    "at line {}:{}: unexpected end of input, expected {expected}",
+                    position.line, position.column
+                )
+            }
+            ParseError::InvalidIdentifier { reason, position } => {
+                write!(
+                    f,
+                    "at line {}:{}: invalid identifier: {reason}",
+                    position.line, position.column
+                )
+            }
+            ParseError::InvalidStringLiteral { reason, position } => {
+                write!(
+                    f,
+                    "at line {}:{}: invalid string literal: {reason}",
+                    position.line, position.column
+                )
+            }
+            ParseError::InvalidNumber { reason, position } => {
+                write!(
+                    f,
+                    "at line {}:{}: invalid number: {reason}",
+                    position.line, position.column
+                )
+            }
+            ParseError::DuplicateFieldName { name, position } => {
+                write!(
+                    f,
+                    "at line {}:{}: duplicate field name '{name}'",
+                    position.line, position.column
+                )
+            }
+            ParseError::Custom { message, position } => {
+                write!(
+                    f,
+                    "at line {}:{}: {message}",
+                    position.line, position.column
+                )
+            }
         }
     }
-    out.into_iter().collect()
 }
 
-pub fn string_literal(input: &str) -> ParseResult<String> {
-    context(
-        "string literal",
-        map(
-            delimited(
-                tag("\""),
-                cut(alt((
-                    escaped(none_of(r#"\""#), '\\', one_of(r#"\""#)),
-                    tag(""),
-                ))),
-                tag("\""),
-            ),
-            |x: &str| unescape(x),
-        ),
-    )(input)
+impl std::error::Error for ParseError {}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Token {
+    // Keywords
+    Type,
+    Bool,
+    String,
+    Number,
+    True,
+    False,
+
+    // Identifiers and literals
+    Identifier(String),
+    StringLiteral(String),
+    NumberLiteral(f64),
+
+    // Symbols
+    LeftBrace,
+    RightBrace,
+    LeftBracket,
+    RightBracket,
+    Colon,
+    Comma,
+    Equals,
+    At,
+    DoubleColon,
+
+    // Special conflict resolution keywords
+    Agreement,
+    Sticky,
+    Wins,
+    Last,
+    Highest,
+    Largest,
 }
 
-pub fn number_literal(input: &str) -> ParseResult<f64> {
-    // TODO(rescrv):  Make this support float.
-    context(
-        "number literal",
-        map_res(recognize(tuple((opt(tag("-")), digit1))), str::parse::<f64>),
-    )(input)
+impl fmt::Display for Token {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Token::Type => write!(f, "type"),
+            Token::Bool => write!(f, "bool"),
+            Token::String => write!(f, "string"),
+            Token::Number => write!(f, "number"),
+            Token::True => write!(f, "true"),
+            Token::False => write!(f, "false"),
+            Token::Identifier(s) => write!(f, "{s}"),
+            Token::StringLiteral(s) => write!(f, "\"{s}\""),
+            Token::NumberLiteral(n) => write!(f, "{n}"),
+            Token::LeftBrace => write!(f, "{{"),
+            Token::RightBrace => write!(f, "}}"),
+            Token::LeftBracket => write!(f, "["),
+            Token::RightBracket => write!(f, "]"),
+            Token::Colon => write!(f, ":"),
+            Token::Comma => write!(f, ","),
+            Token::Equals => write!(f, "="),
+            Token::At => write!(f, "@"),
+            Token::DoubleColon => write!(f, "::"),
+            Token::Agreement => write!(f, "agreement"),
+            Token::Sticky => write!(f, "sticky"),
+            Token::Wins => write!(f, "wins"),
+            Token::Last => write!(f, "last"),
+            Token::Highest => write!(f, "highest"),
+            Token::Largest => write!(f, "largest"),
+        }
+    }
 }
 
-pub fn bool_conflicts(input: &str) -> ParseResult<OnConflict> {
-    context(
-        "bool conflicts",
-        map(
-            opt(map(tuple((ws0, tag("@"), ws0, tag("agreement"))), |_| {
-                OnConflict::Agreement
-            })),
-            |x| x.unwrap_or_default(),
-        ),
-    )(input)
+pub struct Lexer {
+    input: Vec<char>,
+    position: usize,
+    line: usize,
+    column: usize,
 }
 
-pub fn optional_default_bool(input: &str) -> ParseResult<bool> {
-    context(
-        "bool default",
-        map(
-            opt(alt((
-                map(tuple((ws0, tag("="), ws0, tag("true"))), |_| true),
-                map(tuple((ws0, tag("="), ws0, tag("false"))), |_| false),
-            ))),
-            |b| b.unwrap_or(false),
-        ),
-    )(input)
+impl Lexer {
+    pub fn new(input: &str) -> Self {
+        Self {
+            input: input.chars().collect(),
+            position: 0,
+            line: 1,
+            column: 1,
+        }
+    }
+
+    fn current_position(&self) -> Position {
+        Position::new(self.line, self.column)
+    }
+
+    fn peek(&self) -> Option<char> {
+        self.input.get(self.position).copied()
+    }
+
+    fn advance(&mut self) -> Option<char> {
+        if let Some(ch) = self.peek() {
+            self.position += 1;
+            if ch == '\n' {
+                self.line += 1;
+                self.column = 1;
+            } else {
+                self.column += 1;
+            }
+            Some(ch)
+        } else {
+            None
+        }
+    }
+
+    fn skip_whitespace(&mut self) {
+        while let Some(ch) = self.peek() {
+            if ch.is_whitespace() {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn read_identifier(&mut self) -> String {
+        let mut ident = String::new();
+        while let Some(ch) = self.peek() {
+            if ch.is_alphanumeric() || ch == '_' {
+                ident.push(ch);
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        ident
+    }
+
+    fn read_string_literal(&mut self) -> Result<String, ParseError> {
+        let start_pos = self.current_position();
+
+        // Skip opening quote
+        self.advance();
+
+        let mut result = String::new();
+        let mut escaped = false;
+
+        loop {
+            match self.peek() {
+                None => {
+                    return Err(ParseError::InvalidStringLiteral {
+                        reason: "unterminated string literal".to_string(),
+                        position: start_pos,
+                    });
+                }
+                Some('\\') if !escaped => {
+                    escaped = true;
+                    self.advance();
+                }
+                Some('"') if !escaped => {
+                    self.advance();
+                    return Ok(result);
+                }
+                Some(ch) => {
+                    if escaped {
+                        match ch {
+                            '"' | '\\' => result.push(ch),
+                            _ => {
+                                return Err(ParseError::InvalidStringLiteral {
+                                    reason: format!("invalid escape sequence '\\{ch}'"),
+                                    position: self.current_position(),
+                                });
+                            }
+                        }
+                        escaped = false;
+                    } else {
+                        result.push(ch);
+                    }
+                    self.advance();
+                }
+            }
+        }
+    }
+
+    fn read_number(&mut self) -> Result<f64, ParseError> {
+        let start_pos = self.current_position();
+        let mut num_str = String::new();
+
+        // Handle negative sign
+        if self.peek() == Some('-') {
+            num_str.push('-');
+            self.advance();
+        }
+
+        // Read digits and decimal point
+        while let Some(ch) = self.peek() {
+            if ch.is_ascii_digit() || (ch == '.' && !num_str.contains('.')) {
+                num_str.push(ch);
+                self.advance();
+            } else {
+                break;
+            }
+        }
+
+        num_str
+            .parse::<f64>()
+            .map_err(|_| ParseError::InvalidNumber {
+                reason: format!("'{num_str}' is not a valid number"),
+                position: start_pos,
+            })
+    }
+
+    pub fn tokenize(&mut self) -> Result<Vec<(Token, Position)>, ParseError> {
+        let mut tokens = Vec::new();
+
+        loop {
+            self.skip_whitespace();
+
+            let pos = self.current_position();
+
+            match self.peek() {
+                None => break,
+                Some('"') => {
+                    let string_lit = self.read_string_literal()?;
+                    tokens.push((Token::StringLiteral(string_lit), pos));
+                }
+                Some('-') | Some('0'..='9') => {
+                    let num = self.read_number()?;
+                    tokens.push((Token::NumberLiteral(num), pos));
+                }
+                Some('{') => {
+                    self.advance();
+                    tokens.push((Token::LeftBrace, pos));
+                }
+                Some('}') => {
+                    self.advance();
+                    tokens.push((Token::RightBrace, pos));
+                }
+                Some('[') => {
+                    self.advance();
+                    tokens.push((Token::LeftBracket, pos));
+                }
+                Some(']') => {
+                    self.advance();
+                    tokens.push((Token::RightBracket, pos));
+                }
+                Some(':') => {
+                    self.advance();
+                    if self.peek() == Some(':') {
+                        self.advance();
+                        tokens.push((Token::DoubleColon, pos));
+                    } else {
+                        tokens.push((Token::Colon, pos));
+                    }
+                }
+                Some(',') => {
+                    self.advance();
+                    tokens.push((Token::Comma, pos));
+                }
+                Some('=') => {
+                    self.advance();
+                    tokens.push((Token::Equals, pos));
+                }
+                Some('@') => {
+                    self.advance();
+                    tokens.push((Token::At, pos));
+                }
+                Some(ch) if ch.is_alphabetic() || ch == '_' => {
+                    let ident = self.read_identifier();
+                    let token = match ident.as_str() {
+                        "type" => Token::Type,
+                        "bool" => Token::Bool,
+                        "string" => Token::String,
+                        "number" => Token::Number,
+                        "true" => Token::True,
+                        "false" => Token::False,
+                        "agreement" => Token::Agreement,
+                        "sticky" => Token::Sticky,
+                        "wins" => Token::Wins,
+                        "last" => Token::Last,
+                        "highest" => Token::Highest,
+                        "largest" => Token::Largest,
+                        _ => Token::Identifier(ident),
+                    };
+                    tokens.push((token, pos));
+                }
+                Some(ch) => {
+                    return Err(ParseError::Custom {
+                        message: format!("unexpected character '{ch}'"),
+                        position: pos,
+                    });
+                }
+            }
+        }
+
+        Ok(tokens)
+    }
 }
 
-pub fn string_conflicts(input: &str) -> ParseResult<OnConflict> {
-    context(
-        "string conflicts",
-        map(
-            opt(map(tuple((ws0, tag("@"), ws0, tag("agreement"))), |_| {
-                OnConflict::Agreement
-            })),
-            |x| x.unwrap_or_default(),
-        ),
-    )(input)
+pub struct Parser {
+    tokens: Vec<(Token, Position)>,
+    position: usize,
 }
 
-pub fn optional_default_string(input: &str) -> ParseResult<Option<String>> {
-    context(
-        "string default",
-        opt(map(
-            tuple((ws0, tag("="), ws0, string_literal)),
-            |(_, _, _, x)| x,
-        )),
-    )(input)
-}
+impl Parser {
+    pub fn new(tokens: Vec<(Token, Position)>) -> Self {
+        Self {
+            tokens,
+            position: 0,
+        }
+    }
 
-pub fn string_enum_conflicts(input: &str) -> ParseResult<OnConflict> {
-    context(
-        "string enum conflicts",
-        map(
-            opt(alt((
-                map(
-                    tuple((ws0, tag("@"), ws0, tag("highest"), ws0, tag("wins"))),
-                    |_| OnConflict::LargestValue,
-                ),
-                map(tuple((ws0, tag("@"), ws0, tag("agreement"))), |_| {
-                    OnConflict::Agreement
-                }),
-            ))),
-            |x| x.unwrap_or_default(),
-        ),
-    )(input)
-}
+    fn current_position(&self) -> Position {
+        self.tokens
+            .get(self.position)
+            .map(|(_, pos)| pos.clone())
+            .unwrap_or_else(|| {
+                self.tokens
+                    .last()
+                    .map(|(_, pos)| Position::new(pos.line, pos.column + 1))
+                    .unwrap_or_else(|| Position::new(1, 1))
+            })
+    }
 
-pub fn optional_default_string_enum(input: &str) -> ParseResult<Option<String>> {
-    context(
-        "string enum default",
-        opt(map(
-            tuple((ws0, tag("="), ws0, string_literal)),
-            |(_, _, _, x)| x,
-        )),
-    )(input)
-}
+    fn peek(&self) -> Option<&Token> {
+        self.tokens.get(self.position).map(|(token, _)| token)
+    }
 
-pub fn number_conflicts(input: &str) -> ParseResult<OnConflict> {
-    context(
-        "number conflicts",
-        map(
-            opt(alt((
-                map(
-                    tuple((ws0, tag("@"), ws0, tag("largest"), ws0, tag("wins"))),
-                    |_| OnConflict::LargestValue,
-                ),
-                map(tuple((ws0, tag("@"), ws0, tag("agreement"))), |_| {
-                    OnConflict::Agreement
-                }),
-            ))),
-            |x| x.unwrap_or_default(),
-        ),
-    )(input)
-}
+    fn advance(&mut self) -> Option<Token> {
+        if self.position < self.tokens.len() {
+            let token = self.tokens[self.position].0.clone();
+            self.position += 1;
+            Some(token)
+        } else {
+            None
+        }
+    }
 
-pub fn optional_default_number(input: &str) -> ParseResult<Option<f64>> {
-    context(
-        "number default",
-        opt(map(
-            tuple((ws0, tag("="), ws0, number_literal)),
-            |(_, _, _, x)| x,
-        )),
-    )(input)
-}
+    fn expect(&mut self, expected: Token) -> Result<(), ParseError> {
+        let pos = self.current_position();
+        match self.peek() {
+            Some(token) if *token == expected => {
+                self.advance();
+                Ok(())
+            }
+            Some(token) => Err(ParseError::UnexpectedToken {
+                expected: expected.to_string(),
+                found: token.to_string(),
+                position: pos,
+            }),
+            None => Err(ParseError::UnexpectedEndOfInput {
+                expected: expected.to_string(),
+                position: pos,
+            }),
+        }
+    }
 
-pub fn field(input: &str) -> ParseResult<Field> {
-    context(
-        "field",
-        alt((
-            map(
-                tuple((
-                    ws0,
-                    identifier,
-                    ws0,
-                    tag(":"),
-                    ws0,
-                    tag("bool"),
-                    cut(ws0),
-                    bool_conflicts,
-                    ws0,
-                    optional_default_bool,
-                )),
-                |(_, name, _, _, _, _, _, on_conflict, _, default)| Field::Bool {
+    fn parse_identifier(&mut self) -> Result<String, ParseError> {
+        let pos = self.current_position();
+        match self.advance() {
+            Some(Token::Identifier(name)) => Ok(name),
+            Some(token) => Err(ParseError::UnexpectedToken {
+                expected: "identifier".to_string(),
+                found: token.to_string(),
+                position: pos,
+            }),
+            None => Err(ParseError::UnexpectedEndOfInput {
+                expected: "identifier".to_string(),
+                position: pos,
+            }),
+        }
+    }
+
+    fn parse_string_literal(&mut self) -> Result<String, ParseError> {
+        let pos = self.current_position();
+        match self.advance() {
+            Some(Token::StringLiteral(s)) => Ok(s),
+            Some(token) => Err(ParseError::UnexpectedToken {
+                expected: "string literal".to_string(),
+                found: token.to_string(),
+                position: pos,
+            }),
+            None => Err(ParseError::UnexpectedEndOfInput {
+                expected: "string literal".to_string(),
+                position: pos,
+            }),
+        }
+    }
+
+    fn parse_number_literal(&mut self) -> Result<f64, ParseError> {
+        let pos = self.current_position();
+        match self.advance() {
+            Some(Token::NumberLiteral(n)) => Ok(n),
+            Some(token) => Err(ParseError::UnexpectedToken {
+                expected: "number literal".to_string(),
+                found: token.to_string(),
+                position: pos,
+            }),
+            None => Err(ParseError::UnexpectedEndOfInput {
+                expected: "number literal".to_string(),
+                position: pos,
+            }),
+        }
+    }
+
+    fn parse_bool_conflict(&mut self) -> Result<OnConflict, ParseError> {
+        if self.peek() == Some(&Token::At) {
+            self.advance();
+            match self.peek() {
+                Some(Token::Sticky) => {
+                    self.advance();
+                    Ok(OnConflict::LargestValue)
+                }
+                Some(Token::Agreement) => {
+                    self.advance();
+                    Ok(OnConflict::Agreement)
+                }
+                _ => {
+                    let pos = self.current_position();
+                    Err(ParseError::Custom {
+                        message: "expected 'sticky' or 'agreement' after '@'".to_string(),
+                        position: pos,
+                    })
+                }
+            }
+        } else {
+            Ok(OnConflict::Default)
+        }
+    }
+
+    fn parse_string_conflict(&mut self) -> Result<OnConflict, ParseError> {
+        if self.peek() == Some(&Token::At) {
+            self.advance();
+            if self.peek() == Some(&Token::Last) {
+                self.advance();
+                self.expect(Token::Wins)?;
+                Ok(OnConflict::LargestValue)
+            } else if self.peek() == Some(&Token::Agreement) {
+                self.advance();
+                Ok(OnConflict::Agreement)
+            } else {
+                let pos = self.current_position();
+                Err(ParseError::Custom {
+                    message: "expected 'last wins' or 'agreement' after '@'".to_string(),
+                    position: pos,
+                })
+            }
+        } else {
+            Ok(OnConflict::Default)
+        }
+    }
+
+    fn parse_string_enum_conflict(&mut self) -> Result<OnConflict, ParseError> {
+        if self.peek() == Some(&Token::At) {
+            self.advance();
+            if self.peek() == Some(&Token::Highest) {
+                self.advance();
+                self.expect(Token::Wins)?;
+                Ok(OnConflict::LargestValue)
+            } else if self.peek() == Some(&Token::Agreement) {
+                self.advance();
+                Ok(OnConflict::Agreement)
+            } else {
+                let pos = self.current_position();
+                Err(ParseError::Custom {
+                    message: "expected 'highest wins' or 'agreement' after '@'".to_string(),
+                    position: pos,
+                })
+            }
+        } else {
+            Ok(OnConflict::Default)
+        }
+    }
+
+    fn parse_number_conflict(&mut self) -> Result<OnConflict, ParseError> {
+        if self.peek() == Some(&Token::At) {
+            self.advance();
+            if matches!(self.peek(), Some(&Token::Last) | Some(&Token::Largest)) {
+                self.advance();
+                self.expect(Token::Wins)?;
+                Ok(OnConflict::LargestValue)
+            } else if self.peek() == Some(&Token::Agreement) {
+                self.advance();
+                Ok(OnConflict::Agreement)
+            } else {
+                let pos = self.current_position();
+                Err(ParseError::Custom {
+                    message: "expected 'last wins', 'largest wins', or 'agreement' after '@'"
+                        .to_string(),
+                    position: pos,
+                })
+            }
+        } else {
+            Ok(OnConflict::Default)
+        }
+    }
+
+    fn parse_field(&mut self) -> Result<Field, ParseError> {
+        let name = self.parse_identifier()?;
+        self.expect(Token::Colon)?;
+
+        match self.peek() {
+            Some(Token::Bool) => {
+                self.advance();
+                let on_conflict = self.parse_bool_conflict()?;
+                let default = if self.peek() == Some(&Token::Equals) {
+                    self.advance();
+                    match self.advance() {
+                        Some(Token::True) => true,
+                        Some(Token::False) => false,
+                        _ => {
+                            return Err(ParseError::Custom {
+                                message: "expected 'true' or 'false' after '='".to_string(),
+                                position: self.current_position(),
+                            });
+                        }
+                    }
+                } else {
+                    false
+                };
+                Ok(Field::Bool {
                     name,
                     on_conflict,
                     default,
-                },
-            ),
-            map(
-                tuple((
-                    ws0,
-                    identifier,
-                    ws0,
-                    tag(":"),
-                    ws0,
-                    tag("string"),
-                    cut(ws0),
-                    string_conflicts,
-                    ws0,
-                    optional_default_string,
-                )),
-                |(_, name, _, _, _, _, _, on_conflict, _, default)| Field::String {
+                })
+            }
+            Some(Token::String) => {
+                self.advance();
+                let on_conflict = self.parse_string_conflict()?;
+                let default = if self.peek() == Some(&Token::Equals) {
+                    self.advance();
+                    Some(self.parse_string_literal()?)
+                } else {
+                    None
+                };
+                Ok(Field::String {
                     name,
                     on_conflict,
                     default,
-                },
-            ),
-            map(
-                tuple((
-                    ws0,
-                    identifier,
-                    ws0,
-                    tag(":"),
-                    ws0,
-                    tag("[string]"),
-                    cut(ws0),
-                )),
-                |(_, name, _, _, _, _, _)| Field::StringArray { name },
-            ),
-            map(
-                tuple((
-                    ws0,
-                    identifier,
-                    ws0,
-                    tag(":"),
-                    ws0,
-                    tag("["),
-                    ws0,
-                    separated_list1(tuple((ws0, tag(","), ws0)), string_literal),
-                    ws0,
-                    tag("]"),
-                    ws0,
-                    string_enum_conflicts,
-                    ws0,
-                    optional_default_string_enum,
-                )),
-                |(_, name, _, _, _, _, _, values, _, _, _, on_conflict, _, default)| {
-                    Field::StringEnum {
+                })
+            }
+            Some(Token::Number) => {
+                self.advance();
+                let on_conflict = self.parse_number_conflict()?;
+                let default = if self.peek() == Some(&Token::Equals) {
+                    self.advance();
+                    Some(t64(self.parse_number_literal()?))
+                } else {
+                    None
+                };
+                Ok(Field::Number {
+                    name,
+                    on_conflict,
+                    default,
+                })
+            }
+            Some(Token::LeftBracket) => {
+                self.advance();
+                if self.peek() == Some(&Token::String) {
+                    self.advance();
+                    self.expect(Token::RightBracket)?;
+                    Ok(Field::StringArray { name })
+                } else {
+                    // String enum
+                    let mut values = vec![self.parse_string_literal()?];
+                    while self.peek() == Some(&Token::Comma) {
+                        self.advance();
+                        values.push(self.parse_string_literal()?);
+                    }
+                    self.expect(Token::RightBracket)?;
+                    let on_conflict = self.parse_string_enum_conflict()?;
+                    let default = if self.peek() == Some(&Token::Equals) {
+                        self.advance();
+                        Some(self.parse_string_literal()?)
+                    } else {
+                        None
+                    };
+                    Ok(Field::StringEnum {
                         name,
                         values,
                         on_conflict,
                         default,
-                    }
-                },
-            ),
-            map(
-                tuple((
-                    ws0,
-                    identifier,
-                    ws0,
-                    tag(":"),
-                    ws0,
-                    tag("number"),
-                    ws0,
-                    number_conflicts,
-                    ws0,
-                    optional_default_number,
-                )),
-                |(_, name, _, _, _, _, _, on_conflict, _, default)| Field::Number {
-                    name,
-                    on_conflict,
-                    default: default.map(t64),
-                },
-            ),
-        )),
-    )(input)
-}
-
-pub fn policy_type(input: &str) -> ParseResult<PolicyType> {
-    context(
-        "policy type",
-        map(
-            tuple((
-                ws0,
-                tag("type"),
-                ws0,
-                separated_list1(tag("::"), identifier),
-                ws0,
-                tag("{"),
-                ws0,
-                terminated(separated_list1(tag(","), field), opt(tag(","))),
-                ws0,
-                tag("}"),
-                ws0,
-            )),
-            |(_, _, _, name, _, _, _, fields, _, _, _)| PolicyType {
-                name: name.join("::"),
-                fields,
-            },
-        ),
-    )(input)
-}
-
-///////////////////////////////////////////// parse_all ////////////////////////////////////////////
-
-pub fn parse_all<T, F: Fn(&str) -> ParseResult<T> + Copy>(
-    f: F,
-) -> impl Fn(&str) -> Result<T, ParseError> {
-    move |input| {
-        let (rem, t) = match all_consuming(f)(input) {
-            Ok((rem, t)) => (rem, t),
-            Err(err) => match err {
-                nom::Err::Incomplete(_) => {
-                    panic!("all_consuming combinator should be all consuming");
+                    })
                 }
-                nom::Err::Error(err) | nom::Err::Failure(err) => {
-                    return Err(interpret_verbose_error(input, err));
-                }
-            },
-        };
-        if rem.is_empty() {
-            Ok(t)
-        } else {
-            panic!("all_consuming combinator should be all consuming");
+            }
+            _ => {
+                let pos = self.current_position();
+                Err(ParseError::Custom {
+                    message: "expected field type (bool, string, number, or [...)".to_string(),
+                    position: pos,
+                })
+            }
         }
+    }
+
+    pub fn parse_policy_type(&mut self) -> Result<PolicyType, ParseError> {
+        self.expect(Token::Type)?;
+
+        // Parse name (can be namespaced with ::)
+        let mut name_parts = vec![self.parse_identifier()?];
+        while self.peek() == Some(&Token::DoubleColon) {
+            self.advance();
+            name_parts.push(self.parse_identifier()?);
+        }
+        let name = name_parts.join("::");
+
+        self.expect(Token::LeftBrace)?;
+
+        let mut fields = Vec::new();
+        let mut field_names = std::collections::HashSet::new();
+
+        // Parse fields
+        while self.peek() != Some(&Token::RightBrace) && self.peek().is_some() {
+            let field = self.parse_field()?;
+
+            // Check for duplicate field names
+            let field_name = match &field {
+                Field::Bool { name, .. }
+                | Field::String { name, .. }
+                | Field::StringEnum { name, .. }
+                | Field::StringArray { name }
+                | Field::Number { name, .. } => name.clone(),
+            };
+
+            if !field_names.insert(field_name.clone()) {
+                return Err(ParseError::DuplicateFieldName {
+                    name: field_name,
+                    position: self.current_position(),
+                });
+            }
+
+            fields.push(field);
+
+            // Handle optional comma
+            if self.peek() == Some(&Token::Comma) {
+                self.advance();
+            } else if self.peek() != Some(&Token::RightBrace) {
+                return Err(ParseError::Custom {
+                    message: "expected ',' or '}' after field definition".to_string(),
+                    position: self.current_position(),
+                });
+            }
+        }
+
+        self.expect(Token::RightBrace)?;
+
+        Ok(PolicyType { name, fields })
     }
 }
 
-////////////////////////////////////////////// private /////////////////////////////////////////////
-
-fn ws0(input: &str) -> ParseResult<()> {
-    map(multispace0, |_| ())(input)
+pub fn parse(input: &str) -> Result<PolicyType, ParseError> {
+    let mut lexer = Lexer::new(input);
+    let tokens = lexer.tokenize()?;
+    let mut parser = Parser::new(tokens);
+    parser.parse_policy_type()
 }
-
-/////////////////////////////////////////////// tests //////////////////////////////////////////////
 
 #[cfg(test)]
-mod test {
-    use nom::combinator::{complete, cut};
-
+mod tests {
     use super::*;
 
-    fn parse_error(s: &'static str) -> ParseError {
-        ParseError {
-            string: s.to_string(),
+    #[test]
+    fn test_lexer_simple() {
+        let mut lexer = Lexer::new("type Test { }");
+        let tokens = lexer.tokenize().unwrap();
+        assert_eq!(tokens.len(), 4);
+        assert_eq!(tokens[0].0, Token::Type);
+        assert_eq!(tokens[1].0, Token::Identifier("Test".to_string()));
+        assert_eq!(tokens[2].0, Token::LeftBrace);
+        assert_eq!(tokens[3].0, Token::RightBrace);
+    }
+
+    #[test]
+    fn test_parse_simple() {
+        let result = parse("type Test { }");
+        assert!(result.is_ok());
+        let policy_type = result.unwrap();
+        assert_eq!(policy_type.name, "Test");
+        assert_eq!(policy_type.fields.len(), 0);
+    }
+
+    #[test]
+    fn test_parse_bool_field() {
+        let result = parse("type Test { active: bool = true }");
+        assert!(result.is_ok());
+        let policy_type = result.unwrap();
+        assert_eq!(policy_type.fields.len(), 1);
+        match &policy_type.fields[0] {
+            Field::Bool { name, default, .. } => {
+                assert_eq!(name, "active");
+                assert!(*default);
+            }
+            _ => panic!("Expected bool field"),
         }
     }
 
-    fn interpret_error_for_test<'a, T, F: FnMut(&'a str) -> ParseResult<'a, T>>(
-        mut f: F,
-    ) -> impl FnMut(&'a str) -> Result<T, ParseError> {
-        move |input| match f(input) {
-            Ok((_, t)) => Ok(t),
-            Err(err) => match err {
-                nom::Err::Error(err) | nom::Err::Failure(err) => {
-                    Err(interpret_verbose_error(input, err))
-                }
-                nom::Err::Incomplete(_) => {
-                    panic!("incomplete should never happen in tests");
-                }
-            },
+    #[test]
+    fn test_parse_data_policy_file() {
+        const POLICY_CONTENT: &str = include_str!("../data/policy");
+        let result = parse(POLICY_CONTENT);
+
+        match &result {
+            Err(e) => panic!("Failed to parse data/policy: {e}"),
+            Ok(policy_type) => {
+                assert_eq!(policy_type.name, "policyai::EmailPolicy");
+                assert_eq!(policy_type.fields.len(), 6);
+            }
         }
-    }
-
-    #[test]
-    fn identifier9() {
-        assert_eq!(
-            "__identifier9",
-            parse_all(identifier)("__identifier9").unwrap(),
-        );
-    }
-
-    #[test]
-    fn identifier_empty() {
-        assert_eq!(
-            parse_error(
-                r#"0: at line 1, in identifier:
-
-^"#
-            ),
-            interpret_error_for_test(cut(complete(all_consuming(identifier))))("").unwrap_err()
-        );
-    }
-
-    #[test]
-    fn identifier_dashes() {
-        assert_eq!(
-            parse_error(
-                r#"0: at line 1, in identifier:
--not-identifier
-^"#
-            ),
-            interpret_error_for_test(cut(complete(all_consuming(identifier))))("-not-identifier")
-                .unwrap_err()
-        );
-    }
-
-    #[test]
-    fn identifier_starts_with_number() {
-        assert_eq!(
-            parse_error(
-                r#"0: at line 1, in identifier:
-9identifier__
-^"#
-            ),
-            interpret_error_for_test(cut(complete(all_consuming(identifier))))("9identifier__")
-                .unwrap_err()
-        );
-    }
-
-    #[test]
-    fn parse_string_literal() {
-        assert_eq!(
-            "".to_string(),
-            interpret_error_for_test(cut(complete(all_consuming(string_literal))))(r#""""#)
-                .unwrap(),
-        );
-        assert_eq!(
-            r#"""#.to_string(),
-            interpret_error_for_test(cut(complete(all_consuming(string_literal))))(r#""\"""#)
-                .unwrap(),
-        );
-        assert_eq!(
-            r#"\"#.to_string(),
-            interpret_error_for_test(cut(complete(all_consuming(string_literal))))(r#""\\""#)
-                .unwrap(),
-        );
-        assert_eq!(
-            r#""hello""world""#.to_string(),
-            interpret_error_for_test(cut(complete(all_consuming(string_literal))))(
-                r#""\"hello\"\"world\"""#
-            )
-            .unwrap(),
-        );
-    }
-
-    #[test]
-    fn parse_number_literal() {
-        assert_eq!(
-            0 as f64,
-            interpret_error_for_test(cut(complete(all_consuming(number_literal))))("0").unwrap(),
-        );
-        assert_eq!(
-            i32::MIN as f64,
-            interpret_error_for_test(cut(complete(all_consuming(number_literal))))("-2147483648")
-                .unwrap(),
-        );
-        assert_eq!(
-            i32::MAX as f64,
-            interpret_error_for_test(cut(complete(all_consuming(number_literal))))("2147483647")
-                .unwrap(),
-        );
-        assert_eq!(
-            u32::MAX as f64,
-            interpret_error_for_test(cut(complete(all_consuming(number_literal))))("4294967295")
-                .unwrap(),
-        );
-        assert_eq!(
-            i64::MIN as f64,
-            interpret_error_for_test(cut(complete(all_consuming(number_literal))))(
-                "-9223372036854775808"
-            )
-            .unwrap(),
-        );
-        assert_eq!(
-            i64::MAX as f64,
-            interpret_error_for_test(cut(complete(all_consuming(number_literal))))(
-                "9223372036854775807"
-            )
-            .unwrap(),
-        );
-        assert_eq!(
-            u64::MAX as f64,
-            interpret_error_for_test(cut(complete(all_consuming(number_literal))))(
-                "18446744073709551615"
-            )
-            .unwrap(),
-        );
-    }
-
-    #[test]
-    fn field_string_enum() {
-        let f = Field::StringEnum {
-            name: "category".to_string(),
-            values: vec![
-                "ai".to_string(),
-                "distributed systems".to_string(),
-                "other".to_string(),
-            ],
-            default: Some("other".to_string()),
-            on_conflict: OnConflict::Agreement,
-        };
-        let display = f.to_string();
-        println!("{display}");
-        assert_eq!(
-            f,
-            interpret_error_for_test(cut(complete(all_consuming(field))))(&display).unwrap(),
-        );
-    }
-
-    #[test]
-    fn readme_and_more() {
-        let this = PolicyType {
-            name: "policyai::EmailPolicy".to_string(),
-            fields: vec![
-                Field::Bool {
-                    name: "unread".to_string(),
-                    default: true,
-                    on_conflict: OnConflict::Default,
-                },
-                Field::String {
-                    name: "template".to_string(),
-                    default: None,
-                    on_conflict: OnConflict::Agreement,
-                },
-                Field::StringEnum {
-                    name: "priority".to_string(),
-                    values: vec!["low".to_string(), "medium".to_string(), "high".to_string()],
-                    default: None,
-                    on_conflict: OnConflict::LargestValue,
-                },
-                Field::StringEnum {
-                    name: "category".to_string(),
-                    values: vec![
-                        "ai".to_string(),
-                        "distributed systems".to_string(),
-                        "other".to_string(),
-                    ],
-                    default: Some("other".to_string()),
-                    on_conflict: OnConflict::Agreement,
-                },
-                Field::StringArray {
-                    name: "labels".to_string(),
-                },
-                Field::Number {
-                    name: "number".to_string(),
-                    default: None,
-                    on_conflict: OnConflict::Default,
-                },
-            ],
-        };
-        let display = this.to_string();
-        println!("{display}");
-        assert_eq!(
-            this,
-            interpret_error_for_test(cut(complete(all_consuming(policy_type))))(&display).unwrap(),
-        );
     }
 }
