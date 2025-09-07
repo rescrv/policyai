@@ -1,3 +1,9 @@
+//! Data structures and utilities for test data generation and policy evaluation.
+//!
+//! This module provides functionality for semantic injection testing, policy evaluation,
+//! and test data generation. It includes utilities for determining policy applicability
+//! and structures for evaluation metrics and test data points.
+
 use claudius::{
     Anthropic, CacheControlEphemeral, ContentBlock, KnownModel, MessageCreateParams, MessageParam,
     MessageParamContent, MessageRole, Model, StopReason, SystemPrompt, TextBlock, ThinkingConfig,
@@ -5,13 +11,74 @@ use claudius::{
 
 use crate::{Policy, Usage};
 
+/// A semantic injection with multiple candidate injections and their rationales.
+///
+/// This structure represents test data for evaluating semantic injections against text.
+/// It contains multiple injection candidates, their supporting rationales, and the
+/// original text they were derived from.
+///
+/// # Examples
+///
+/// ```
+/// use policyai::data::SemanticInjection;
+///
+/// let injection = SemanticInjection {
+///     injections: vec!["If urgent, set priority high".to_string()],
+///     rationales: vec!["Urgent emails need immediate attention".to_string()],
+///     text: "URGENT: Please respond ASAP".to_string(),
+/// };
+/// ```
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct SemanticInjection {
+    /// Candidate semantic injection texts that could be applied to the input text.
     pub injections: Vec<String>,
+    /// Rationales explaining why each semantic injection might be applicable.
     pub rationales: Vec<String>,
+    /// The original text that the semantic injections are designed to match against.
     pub text: String,
 }
 
+/// Determine if a policy applies to given text with statistical confidence.
+///
+/// This function tests whether a semantic injection policy applies to the provided text
+/// by making multiple attempts and requiring at least `k` successes out of `n` total attempts.
+/// Uses Claude to evaluate policy applicability with natural language understanding.
+///
+/// # Arguments
+///
+/// * `client` - The Anthropic client for making API calls
+/// * `text` - The input text to evaluate against the policy
+/// * `semantic_injection` - The policy's semantic injection rule
+/// * `k` - Minimum number of successes required
+/// * `n` - Maximum number of attempts to make
+///
+/// # Returns
+///
+/// Returns `true` if the policy applies with sufficient confidence (≥k successes),
+/// `false` otherwise.
+///
+/// # Errors
+///
+/// Returns [`claudius::Error`] if the API call fails or returns unexpected responses.
+///
+/// # Examples
+///
+/// ```no_run
+/// use claudius::Anthropic;
+/// use policyai::data::policy_applies;
+///
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let client = Anthropic::new(None)?;
+/// let applies = policy_applies(
+///     &client,
+///     "This is urgent!",
+///     "If text indicates urgency, mark as high priority",
+///     3,  // Need 3 successes
+///     5   // Out of 5 attempts
+/// ).await?;
+/// # Ok(())
+/// # }
+/// ```
 pub async fn policy_applies(
     client: &Anthropic,
     text: &str,
@@ -22,6 +89,47 @@ pub async fn policy_applies(
     Ok(apply_policy_fractional(client, text, semantic_injection, k, n).await? >= k)
 }
 
+/// Determine if a policy does NOT apply to given text with statistical confidence.
+///
+/// This function tests whether a semantic injection policy should NOT apply to the provided text
+/// by making multiple attempts and requiring sufficiently few successes. The policy is considered
+/// to not apply if the number of successes is ≤ n-k.
+///
+/// # Arguments
+///
+/// * `client` - The Anthropic client for making API calls
+/// * `text` - The input text to evaluate against the policy
+/// * `semantic_injection` - The policy's semantic injection rule
+/// * `k` - Minimum number of successes that would indicate the policy applies
+/// * `n` - Maximum number of attempts to make
+///
+/// # Returns
+///
+/// Returns `true` if the policy does not apply with sufficient confidence (≤n-k successes),
+/// `false` otherwise.
+///
+/// # Errors
+///
+/// Returns [`claudius::Error`] if the API call fails or returns unexpected responses.
+///
+/// # Examples
+///
+/// ```no_run
+/// use claudius::Anthropic;
+/// use policyai::data::policy_does_not_apply;
+///
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let client = Anthropic::new(None)?;
+/// let does_not_apply = policy_does_not_apply(
+///     &client,
+///     "Regular email content",
+///     "If text indicates urgency, mark as high priority",
+///     3,  // Would need 3 successes to apply
+///     5   // Out of 5 attempts
+/// ).await?;
+/// # Ok(())
+/// # }
+/// ```
 pub async fn policy_does_not_apply(
     client: &Anthropic,
     text: &str,
@@ -121,58 +229,227 @@ Output just this one-word answer
     Ok(success)
 }
 
+/// A semantic injection test case with positive and negative examples.
+///
+/// This structure represents a semantic injection along with sets of text examples
+/// that should and should not trigger the injection. Used for testing policy
+/// decision boundaries and generating training data.
+///
+/// # Examples
+///
+/// ```
+/// use policyai::data::DecidableSemanticInjection;
+///
+/// let decidable = DecidableSemanticInjection {
+///     positives: vec![
+///         "URGENT: Please respond immediately".to_string(),
+///         "High priority - needs attention today".to_string(),
+///     ],
+///     negatives: vec![
+///         "Regular update for your information".to_string(),
+///         "Weekly newsletter".to_string(),
+///     ],
+///     text: "If urgent, set priority to high".to_string(),
+/// };
+/// ```
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct DecidableSemanticInjection {
+    /// Text examples that should trigger this semantic injection.
     pub positives: Vec<String>,
+    /// Text examples that should NOT trigger this semantic injection.
     pub negatives: Vec<String>,
+    /// The semantic injection rule or description.
     pub text: String,
 }
 
+/// An injectable action that pairs a semantic condition with a structured output.
+///
+/// This structure represents a policy rule that can be injected into the system,
+/// consisting of a natural language condition and a corresponding JSON action
+/// to take when that condition is met.
+///
+/// # Examples
+///
+/// ```
+/// use policyai::data::InjectableAction;
+/// use serde_json::json;
+///
+/// let action = InjectableAction {
+///     inject: "If the email is marked as urgent".to_string(),
+///     action: json!({
+///         "priority": "high",
+///         "notify_immediately": true
+///     }),
+/// };
+/// ```
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct InjectableAction {
+    /// The natural language condition that determines when this action should be applied.
     pub inject: String,
+    /// The structured JSON action to take when the injection condition is met.
     pub action: serde_json::Value,
 }
 
+/// Represents a field that experienced a conflict during policy application.
+///
+/// This structure tracks fields where multiple policies attempted to set different
+/// values, requiring conflict resolution. Used for testing and debugging policy
+/// interactions.
+///
+/// # Examples
+///
+/// ```
+/// use policyai::data::ConflictField;
+///
+/// let conflict = ConflictField {
+///     conflict_type: "agreement".to_string(),
+///     field_name: "priority".to_string(),
+/// };
+/// ```
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct ConflictField {
+    /// The type of conflict resolution that was applied (e.g., "agreement", "default").
     pub conflict_type: String,
+    /// The name of the field that experienced the conflict.
     pub field_name: String,
 }
 
+/// A complete test case for policy evaluation.
+///
+/// This structure represents a single test case containing input text, the policies
+/// to apply, expected output, and any expected conflicts. Used for systematic
+/// testing of policy behavior and regression detection.
+///
+/// # Examples
+///
+/// ```
+/// use policyai::data::{TestDataPoint, ConflictField};
+/// use policyai::{Policy, PolicyType, Field, OnConflict};
+/// use serde_json::json;
+///
+/// let policy_type = PolicyType {
+///     name: "EmailPolicy".to_string(),
+///     fields: vec![
+///         Field::Bool {
+///             name: "urgent".to_string(),
+///             default: false,
+///             on_conflict: OnConflict::Default,
+///         }
+///     ],
+/// };
+///
+/// let test_point = TestDataPoint {
+///     text: "URGENT: Please respond immediately!".to_string(),
+///     policies: vec![Policy {
+///         r#type: policy_type,
+///         prompt: "Mark urgent emails".to_string(),
+///         action: json!({"urgent": true}),
+///     }],
+///     expected: Some(json!({"urgent": true})),
+///     conflicts: None,
+/// };
+/// ```
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct TestDataPoint {
+    /// The input text to process with the policies.
     pub text: String,
+    /// The policies to apply to the input text.
     pub policies: Vec<Policy>,
+    /// The expected structured output after applying all policies.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expected: Option<serde_json::Value>,
+    /// Expected conflicts that should occur during policy application.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conflicts: Option<Vec<ConflictField>>,
 }
 
+/// Performance and accuracy metrics for policy evaluation.
+///
+/// This structure tracks detailed metrics comparing PolicyAI performance
+/// against a baseline system, including field-level accuracy, timing,
+/// and resource usage statistics.
+///
+/// # Examples
+///
+/// ```
+/// use policyai::data::Metrics;
+/// use policyai::Usage;
+///
+/// let metrics = Metrics {
+///     policyai_fields_matched: 8,
+///     baseline_fields_matched: 6,
+///     policyai_fields_with_wrong_value: 1,
+///     baseline_fields_with_wrong_value: 2,
+///     policyai_apply_duration_ms: 150,
+///     baseline_apply_duration_ms: 300,
+///     ..Default::default()
+/// };
+/// ```
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Metrics {
+    /// Number of fields where PolicyAI output exactly matched the expected value.
     pub policyai_fields_matched: usize,
+    /// Number of fields where baseline output exactly matched the expected value.
     pub baseline_fields_matched: usize,
+    /// Number of fields where PolicyAI provided a value but it was incorrect.
     pub policyai_fields_with_wrong_value: usize,
+    /// Number of fields where baseline provided a value but it was incorrect.
     pub baseline_fields_with_wrong_value: usize,
+    /// Number of expected fields that PolicyAI failed to provide.
     pub policyai_fields_missing: usize,
+    /// Number of expected fields that baseline failed to provide.
     pub baseline_fields_missing: usize,
+    /// Number of unexpected fields that PolicyAI provided.
     pub policyai_extra_fields: usize,
+    /// Number of unexpected fields that baseline provided.
     pub baseline_extra_fields: usize,
+    /// Error message if PolicyAI evaluation failed.
     pub policyai_error: Option<String>,
+    /// Error message if baseline evaluation failed.
     pub baseline_error: Option<String>,
+    /// Time in milliseconds taken by PolicyAI to process the input.
     pub policyai_apply_duration_ms: u32,
+    /// Time in milliseconds taken by baseline to process the input.
     pub baseline_apply_duration_ms: u32,
+    /// Token and API usage statistics for PolicyAI evaluation.
     pub policyai_usage: Option<Usage>,
+    /// Token and API usage statistics for baseline evaluation.
     pub baseline_usage: Option<Usage>,
 }
 
+/// A complete evaluation report comparing PolicyAI performance against a baseline.
+///
+/// This structure contains all the information from a single evaluation run,
+/// including the input test case, performance metrics, and both PolicyAI and
+/// baseline outputs for comparison.
+///
+/// # Examples
+///
+/// ```
+/// use policyai::data::{EvaluationReport, TestDataPoint, Metrics};
+/// use serde_json::json;
+///
+/// let report = EvaluationReport {
+///     input: TestDataPoint {
+///         text: "Test email".to_string(),
+///         policies: vec![],
+///         expected: None,
+///         conflicts: None,
+///     },
+///     metrics: Metrics::default(),
+///     output: json!({"processed": true}),
+///     baseline: Some(json!({"processed": false})),
+/// };
+/// ```
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct EvaluationReport {
+    /// The input test data point that was evaluated.
     pub input: TestDataPoint,
+    /// Performance and accuracy metrics from the evaluation.
     pub metrics: Metrics,
+    /// The structured output produced by PolicyAI.
     pub output: serde_json::Value,
+    /// The structured output produced by the baseline system, if available.
     pub baseline: Option<serde_json::Value>,
 }
 

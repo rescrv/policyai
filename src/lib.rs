@@ -1,3 +1,5 @@
+#![deny(missing_docs)]
+
 //! PolicyAI: A framework for turning unstructured data into structured data via composable policies.
 //!
 //! PolicyAI provides a mechanism for writing policies that transform unstructured text into

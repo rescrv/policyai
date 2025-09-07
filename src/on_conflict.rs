@@ -1,3 +1,8 @@
+//! Conflict resolution strategies for policy fields.
+//!
+//! This module defines the different strategies available for resolving conflicts
+//! when multiple policies attempt to set the same field to different values.
+
 /// Defines how to resolve conflicts when multiple policies set the same field.
 ///
 /// When multiple policies attempt to set the same field to different values,

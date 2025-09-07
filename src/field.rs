@@ -1,3 +1,9 @@
+//! Field definitions for PolicyAI types.
+//!
+//! This module defines the [`Field`] enum which represents the various types of fields
+//! that can be included in a PolicyType. Each field has a name, type, optional default value,
+//! and conflict resolution strategy.
+
 use crate::{t64, OnConflict};
 
 /// Represents a field in a PolicyType with its type, default value, and conflict resolution strategy.
@@ -21,31 +27,52 @@ use crate::{t64, OnConflict};
 /// ```
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub enum Field {
+    /// A boolean field that can be either true or false.
     #[serde(rename = "bool")]
     Bool {
+        /// The name of this field.
         name: String,
+        /// The default boolean value when no policy sets this field.
         default: bool,
+        /// Strategy for resolving conflicts when multiple policies set this field.
         on_conflict: OnConflict,
     },
+    /// A free-form string field.
     #[serde(rename = "string")]
     String {
+        /// The name of this field.
         name: String,
+        /// The default string value when no policy sets this field.
         default: Option<String>,
+        /// Strategy for resolving conflicts when multiple policies set this field.
         on_conflict: OnConflict,
     },
+    /// A string field constrained to a specific set of allowed values.
     #[serde(rename = "enum")]
     StringEnum {
+        /// The name of this field.
         name: String,
+        /// The allowed values for this field.
         values: Vec<String>,
+        /// The default value when no policy sets this field.
         default: Option<String>,
+        /// Strategy for resolving conflicts when multiple policies set this field.
         on_conflict: OnConflict,
     },
+    /// An array of strings that policies can append to.
     #[serde(rename = "array")]
-    StringArray { name: String },
+    StringArray {
+        /// The name of this field.
+        name: String,
+    },
+    /// A numeric field that can hold integer or floating-point values.
     #[serde(rename = "number")]
     Number {
+        /// The name of this field.
         name: String,
+        /// The default numeric value when no policy sets this field.
         default: Option<t64>,
+        /// Strategy for resolving conflicts when multiple policies set this field.
         on_conflict: OnConflict,
     },
 }
