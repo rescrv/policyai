@@ -113,8 +113,10 @@ impl ReportBuilder {
                     default,
                     on_conflict,
                 } => {
-                    let serde_json::Value::Number(v) = value else {
-                        return Err(PolicyError::expected_number(name.clone(), value));
+                    let number_value = match value {
+                        serde_json::Value::Number(v) => Some(v.clone()),
+                        serde_json::Value::Null => None,
+                        _ => return Err(PolicyError::expected_number(name.clone(), value)),
                     };
                     let mask = self.mask_gen.generate();
                     new_masks.push(mask.clone());
@@ -123,10 +125,13 @@ impl ReportBuilder {
                         name.clone(),
                         mask.clone(),
                         *default,
-                        v.clone(),
+                        number_value.clone(),
                         *on_conflict,
                     ));
-                    self.default_return[&mask] = serde_json::Value::Number(v.clone());
+                    self.default_return[&mask] = match &number_value {
+                        Some(v) => serde_json::Value::Number(v.clone()),
+                        None => serde_json::Value::Null,
+                    };
                     content = content.replace(&format!("{name:?}"), &format!("{mask:?}"));
                     if default.is_some() {
                         new_required.push(mask.clone());
@@ -138,8 +143,10 @@ impl ReportBuilder {
                     default,
                     on_conflict,
                 } => {
-                    let serde_json::Value::String(v) = value else {
-                        return Err(PolicyError::expected_string(name.clone(), value));
+                    let string_value = match value {
+                        serde_json::Value::String(v) => Some(v.clone()),
+                        serde_json::Value::Null => None,
+                        _ => return Err(PolicyError::expected_string(name.clone(), value)),
                     };
                     let mask = self.mask_gen.generate();
                     new_masks.push(mask.clone());
@@ -148,10 +155,13 @@ impl ReportBuilder {
                         name.clone(),
                         mask.clone(),
                         default.clone(),
-                        v.clone(),
+                        string_value.clone(),
                         *on_conflict,
                     ));
-                    self.default_return[&mask] = serde_json::Value::String(v.clone());
+                    self.default_return[&mask] = match &string_value {
+                        Some(v) => serde_json::Value::String(v.clone()),
+                        None => serde_json::Value::Null,
+                    };
                     content = content.replace(&format!("{name:?}"), &format!("{mask:?}"));
                     if default.is_some() {
                         new_required.push(mask.clone());
@@ -188,8 +198,14 @@ impl ReportBuilder {
                     default,
                     on_conflict,
                 } => {
-                    let Some(v) = values.iter().find(|x| *x == value) else {
-                        return Err(PolicyError::expected_string(name.clone(), value));
+                    let enum_value = match value {
+                        serde_json::Value::Null => None,
+                        v => {
+                            let Some(found_value) = values.iter().find(|x| *x == v) else {
+                                return Err(PolicyError::expected_string(name.clone(), value));
+                            };
+                            Some(found_value.clone())
+                        }
                     };
                     let mask = self.mask_gen.generate();
                     new_masks.push(mask.clone());
@@ -197,13 +213,15 @@ impl ReportBuilder {
                         self.policy_index,
                         name.clone(),
                         mask.clone(),
-                        v.clone(),
+                        enum_value.clone(),
                         default.clone(),
                         *on_conflict,
                     ));
                     self.default_return[&mask] = false.into();
                     content = content.replace(&format!("{name:?}"), &format!("{mask:?}"));
-                    content = content.replace(&format!("{v:?}"), "true");
+                    if let Some(v) = &enum_value {
+                        content = content.replace(&format!("{v:?}"), "true");
+                    }
                     if default.is_some() {
                         new_required.push(mask.clone());
                     }
