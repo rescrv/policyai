@@ -1,3 +1,8 @@
+//! Usage metrics and resource tracking for PolicyAI operations.
+//!
+//! This module provides the [`Usage`] struct for tracking resource consumption
+//! during policy evaluation, including token usage, wall clock time, and iteration counts.
+
 use std::time::Duration;
 
 use claudius::Usage as ClaudiusUsage;

@@ -1,7 +1,31 @@
+//! Mask generation for creating values unlikely to be in LLM training data.
+//!
+//! This module provides functionality to generate pseudorandom masks that can be used
+//! to replace values with strings that are unlikely to appear in an LLM's training data,
+//! ensuring more reliable policy evaluation and testing.
+
 /////////////////////////////////////////// MaskGenerator //////////////////////////////////////////
 
+/// A pseudorandom mask generator for creating replacement values unlikely to be in LLM training data.
+///
+/// The MaskGenerator uses a linear congruential generator to produce deterministic
+/// sequences of mask strings. Each mask is a fixed-length string using a reduced
+/// character set designed to create values that are unlikely to appear in an LLM's
+/// training data, avoiding visual confusion while maintaining uniqueness.
+///
+/// # Examples
+///
+/// ```
+/// use policyai::MaskGenerator;
+///
+/// let mut generator = MaskGenerator::new();
+/// let mask1 = generator.generate();
+/// let mask2 = generator.generate();
+/// assert_ne!(mask1, mask2);
+/// ```
 #[derive(Clone, Debug)]
 pub struct MaskGenerator {
+    /// Current position in the pseudorandom sequence.
     position: u128,
 }
 
@@ -15,12 +39,41 @@ impl MaskGenerator {
         'p', 'q', 'r', 'v', 'w',
     ];
 
+    /// Create a new mask generator with a fixed seed.
+    ///
+    /// The generator starts at a predetermined position to ensure reproducible
+    /// mask sequences across different runs.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use policyai::MaskGenerator;
+    ///
+    /// let generator = MaskGenerator::new();
+    /// ```
     pub const fn new() -> Self {
         Self {
             position: 743580272,
         }
     }
 
+    /// Generate the next mask string in the sequence.
+    ///
+    /// Each generated mask is a fixed-length string using a carefully chosen
+    /// character set designed to create values unlikely to be in LLM training data.
+    /// The character set avoids visually similar characters, and the first character
+    /// is always lowercase to ensure proper identifier formation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use policyai::MaskGenerator;
+    ///
+    /// let mut generator = MaskGenerator::new();
+    /// let mask = generator.generate();
+    /// assert_eq!(mask.len(), 6);
+    /// assert!(mask.chars().next().unwrap().is_lowercase());
+    /// ```
     pub fn generate(&mut self) -> String {
         let mut index = self.position;
         let mut s = String::with_capacity(Self::LENGTH);

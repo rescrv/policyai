@@ -227,6 +227,39 @@ impl Manager {
         Err(ApplyError::too_many_iterations(max_attempts, last_error))
     }
 
+    /// Prepare a request for LLM processing by building the necessary context.
+    ///
+    /// This method constructs the complete request that will be sent to the LLM,
+    /// including system prompts, policy rules, and the input text. It returns
+    /// both a ReportBuilder for processing the response and the configured request.
+    ///
+    /// # Arguments
+    ///
+    /// * `template` - Base message parameters to use for the LLM request
+    /// * `text` - The unstructured text data to analyze
+    ///
+    /// # Returns
+    ///
+    /// A tuple containing:
+    /// - `ReportBuilder`: Used to process the LLM's structured response
+    /// - `MessageCreateParams`: The complete request ready to send to the LLM
+    ///
+    /// # Errors
+    ///
+    /// Returns `ApplyError` if policy addition to the report builder fails.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use policyai::Manager;
+    /// # use claudius::MessageCreateParams;
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut manager = Manager::default();
+    /// let template = MessageCreateParams::default();
+    /// let (report_builder, request) = manager.request_for(template, "analyze this text").await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn request_for(
         &mut self,
         template: MessageCreateParams,

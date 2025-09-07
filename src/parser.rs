@@ -1,3 +1,9 @@
+//! Parser for PolicyAI type definition language.
+//!
+//! This module implements a lexer and parser for the PolicyAI domain-specific language
+//! used to define policy types. The language allows declaring structured data types
+//! with fields, default values, and conflict resolution strategies.
+
 use std::fmt;
 
 use crate::{t64, Field, OnConflict, PolicyType};
@@ -14,35 +20,61 @@ impl Position {
     }
 }
 
+/// Errors that can occur during parsing of PolicyAI type definitions.
+///
+/// This enum covers various syntax and semantic errors that can occur when
+/// parsing the PolicyAI domain-specific language for type definitions.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParseError {
+    /// An unexpected token was encountered during parsing
     UnexpectedToken {
+        /// What token type was expected
         expected: String,
+        /// What token was actually found
         found: String,
+        /// The position in the input where this occurred
         position: Position,
     },
+    /// The input ended unexpectedly while more tokens were expected
     UnexpectedEndOfInput {
+        /// What was expected to be found
         expected: String,
+        /// The position where the input ended
         position: Position,
     },
+    /// An identifier failed validation rules
     InvalidIdentifier {
+        /// The reason why the identifier is invalid
         reason: String,
+        /// The position of the invalid identifier
         position: Position,
     },
+    /// A string literal could not be parsed correctly
     InvalidStringLiteral {
+        /// The reason why the string literal is invalid
         reason: String,
+        /// The position of the invalid string literal
         position: Position,
     },
+    /// A number could not be parsed correctly
     InvalidNumber {
+        /// The reason why the number is invalid
         reason: String,
+        /// The position of the invalid number
         position: Position,
     },
+    /// A field name was used more than once in a type definition
     DuplicateFieldName {
+        /// The name that was duplicated
         name: String,
+        /// The position of the duplicate field name
         position: Position,
     },
+    /// A custom error message for other parsing issues
     Custom {
+        /// The custom error message
         message: String,
+        /// The position where the error occurred
         position: Position,
     },
 }

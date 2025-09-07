@@ -5,6 +5,12 @@ use crate::{
     StringArrayMask, StringEnumMask, StringMask,
 };
 
+/// Builder for constructing Reports from policy definitions.
+///
+/// A ReportBuilder accumulates policy configurations and creates the necessary
+/// masks and infrastructure for applying those policies to unstructured data.
+/// It handles field obfuscation, schema generation, and intermediate representation
+/// processing.
 #[derive(Clone)]
 pub struct ReportBuilder {
     mask_index: usize,
@@ -23,6 +29,42 @@ pub struct ReportBuilder {
 }
 
 impl ReportBuilder {
+    /// Add a policy to this report builder.
+    ///
+    /// Processes the policy definition and creates the necessary masks for each field
+    /// that has a value specified in the policy's action. Handles field name obfuscation
+    /// for secure communication with LLMs.
+    ///
+    /// # Arguments
+    ///
+    /// * `policy` - The policy to add to this builder
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` if the policy was successfully added, or a `PolicyError`
+    /// if there were issues with the policy definition or field values.
+    ///
+    /// # Errors
+    ///
+    /// Returns `PolicyError` if:
+    /// - Field values don't match their expected types
+    /// - Enum values are not in the allowed set
+    /// - Array fields contain non-string values
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use policyai::{ReportBuilder, Policy, PolicyType};
+    /// let mut builder = ReportBuilder::default();
+    /// # let policy_type = PolicyType::parse("type Test { active: bool = true }").unwrap();
+    /// # let policy = Policy {
+    /// #     r#type: policy_type,
+    /// #     prompt: "test".to_string(),
+    /// #     action: serde_json::json!({"active": true}),
+    /// # };
+    /// builder.add_policy(&policy)?;
+    /// # Ok::<(), policyai::PolicyError>(())
+    /// ```
     pub fn add_policy(&mut self, policy: &Policy) -> Result<(), PolicyError> {
         // Assume default=0, so we increment mask_index here (in case we throw out parts of it) and
         // increment policy_index at the end when we "commit".
@@ -194,6 +236,29 @@ impl ReportBuilder {
         Ok(())
     }
 
+    /// Convert intermediate representation into a final Report.
+    ///
+    /// Takes the JSON output from an LLM and applies all configured masks to extract
+    /// structured data according to the policies that were added to this builder.
+    ///
+    /// # Arguments
+    ///
+    /// * `ir` - The intermediate representation JSON from the LLM
+    ///
+    /// # Returns
+    ///
+    /// Returns a `Report` containing the extracted structured data, or an `ApplyError`
+    /// if there were issues processing the intermediate representation.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use policyai::ReportBuilder;
+    /// let builder = ReportBuilder::default();
+    /// let ir = serde_json::json!({"field_abc": true});
+    /// let report = builder.consume_ir(ir)?;
+    /// # Ok::<(), policyai::ApplyError>(())
+    /// ```
     pub fn consume_ir(self, ir: serde_json::Value) -> Result<Report, ApplyError> {
         let mut report = Report::new(
             self.messages,
@@ -222,14 +287,54 @@ impl ReportBuilder {
         Ok(report)
     }
 
+    /// Get the default return value structure.
+    ///
+    /// Returns the JSON object that represents the default values for all fields,
+    /// which is used when the LLM doesn't provide specific values.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use policyai::ReportBuilder;
+    /// let builder = ReportBuilder::default();
+    /// let defaults = builder.default_return();
+    /// assert!(defaults.is_object());
+    /// ```
     pub fn default_return(&self) -> &serde_json::Value {
         &self.default_return
     }
 
+    /// Get the messages that should be included in LLM requests.
+    ///
+    /// Returns a vector of message parameters containing the formatted policy
+    /// rules that will be sent to the LLM as part of the conversation.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use policyai::ReportBuilder;
+    /// let builder = ReportBuilder::default();
+    /// let messages = builder.messages();
+    /// // Messages will be empty for a default builder with no policies
+    /// ```
     pub fn messages(&self) -> Vec<MessageParam> {
         self.messages.clone()
     }
 
+    /// Get the JSON schema for the expected LLM output.
+    ///
+    /// Returns a JSON schema object that describes the structure and types
+    /// that the LLM should use when providing its response.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use policyai::ReportBuilder;
+    /// let builder = ReportBuilder::default();
+    /// let schema = builder.schema();
+    /// assert_eq!(schema["type"], "object");
+    /// assert!(schema["properties"].is_object());
+    /// ```
     pub fn schema(&self) -> serde_json::Value {
         let mut schema = serde_json::json! {{}};
         schema["type"] = "object".into();

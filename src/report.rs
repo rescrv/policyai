@@ -11,14 +11,23 @@ use crate::{
 /// and any conflicts or errors that occurred during policy application.
 #[derive(serde::Deserialize, serde::Serialize)]
 pub struct Report {
+    /// Messages that were used in the LLM conversation
     pub messages: Vec<MessageParam>,
+    /// Boolean field masks that were applied during processing
     pub bool_masks: Vec<BoolMask>,
+    /// Numeric field masks that were applied during processing
     pub number_masks: Vec<NumberMask>,
+    /// String field masks that were applied during processing
     pub string_masks: Vec<StringMask>,
+    /// String array field masks that were applied during processing
     pub string_array_masks: Vec<StringArrayMask>,
+    /// String enum field masks that were applied during processing
     pub string_enum_masks: Vec<StringEnumMask>,
+    /// Mapping of policy indices to their associated field names
     pub masks_by_index: Vec<Vec<String>>,
+    /// List of policy rule indices that were matched during processing
     pub rules_matched: Vec<usize>,
+    /// The intermediate representation JSON received from the LLM
     pub ir: Option<serde_json::Value>,
 
     default: Option<serde_json::Value>,
@@ -28,6 +37,25 @@ pub struct Report {
 }
 
 impl Report {
+    /// Create a new Report with the specified masks and configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `messages` - Messages to be included in the LLM conversation
+    /// * `bool_masks` - Boolean field masks for policy application
+    /// * `number_masks` - Numeric field masks for policy application
+    /// * `string_masks` - String field masks for policy application
+    /// * `string_array_masks` - String array field masks for policy application
+    /// * `string_enum_masks` - String enum field masks for policy application
+    /// * `masks_by_index` - Mapping of policy indices to their field names
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use policyai::Report;
+    /// use claudius::MessageParam;
+    /// let report = Report::new(vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
+    /// ```
     pub fn new(
         messages: Vec<MessageParam>,
         bool_masks: Vec<BoolMask>,
@@ -54,6 +82,20 @@ impl Report {
         }
     }
 
+    /// Get the final structured output value combining defaults and extracted values.
+    ///
+    /// Returns a JSON object that merges the default values with any values
+    /// that were successfully extracted and reported during policy application.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use policyai::Report;
+    /// # use claudius::MessageParam;
+    /// let report = Report::new(vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
+    /// let output = report.value();
+    /// assert!(output.is_object());
+    /// ```
     pub fn value(&self) -> serde_json::Value {
         let mut value = self.default.clone().unwrap_or(serde_json::json! {{}});
         if let Some(serde_json::Value::Object(obj)) = self.value.as_ref() {
@@ -64,18 +106,77 @@ impl Report {
         value
     }
 
+    /// Get all policy errors that occurred during processing.
+    ///
+    /// Returns a slice of PolicyError instances representing issues such as
+    /// invariant violations, type check failures, and default conflicts.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use policyai::Report;
+    /// # use claudius::MessageParam;
+    /// let report = Report::new(vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
+    /// let errors = report.errors();
+    /// assert!(errors.is_empty());
+    /// ```
     pub fn errors(&self) -> &[PolicyError] {
         &self.errors
     }
 
+    /// Get all conflicts that occurred during policy value resolution.
+    ///
+    /// Returns a slice of Conflict instances representing situations where
+    /// multiple policies specified different values for the same field.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use policyai::Report;
+    /// # use claudius::MessageParam;
+    /// let report = Report::new(vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
+    /// let conflicts = report.conflicts();
+    /// assert!(conflicts.is_empty());
+    /// ```
     pub fn conflicts(&self) -> &[Conflict] {
         &self.conflicts
     }
 
+    /// Check if the report contains any errors or conflicts.
+    ///
+    /// Returns true if there are any policy errors or conflicts that occurred
+    /// during processing, indicating potential issues with the policy application.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use policyai::Report;
+    /// # use claudius::MessageParam;
+    /// let report = Report::new(vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
+    /// assert!(!report.has_errors());
+    /// ```
     pub fn has_errors(&self) -> bool {
         !self.errors.is_empty() || !self.conflicts.is_empty()
     }
 
+    /// Report a default boolean value for a field.
+    ///
+    /// Sets or validates the default value for a boolean field. If a default
+    /// already exists and differs, reports a default conflict error.
+    ///
+    /// # Arguments
+    ///
+    /// * `field` - The name of the field to set the default for
+    /// * `default` - The default boolean value
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use policyai::Report;
+    /// # use claudius::MessageParam;
+    /// let mut report = Report::new(vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
+    /// report.report_bool_default("active", true);
+    /// ```
     pub fn report_bool_default(&mut self, field: &str, default: bool) {
         let build = self.default.get_or_insert_with(|| {
             serde_json::json! {{}}
@@ -95,6 +196,26 @@ impl Report {
         }
     }
 
+    /// Report a boolean value from a policy application.
+    ///
+    /// Records a boolean value extracted by a policy and handles conflicts
+    /// according to the specified conflict resolution strategy.
+    ///
+    /// # Arguments
+    ///
+    /// * `policy_index` - The index of the policy reporting this value
+    /// * `field` - The name of the field being reported
+    /// * `value` - The boolean value to report
+    /// * `on_conflict` - Strategy for handling conflicts with existing values
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use policyai::{Report, OnConflict};
+    /// # use claudius::MessageParam;
+    /// let mut report = Report::new(vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
+    /// report.report_bool(1, "urgent", true, OnConflict::Agreement);
+    /// ```
     pub fn report_bool(
         &mut self,
         policy_index: usize,
@@ -155,6 +276,24 @@ impl Report {
         }
     }
 
+    /// Report a default numeric value for a field.
+    ///
+    /// Sets or validates the default value for a numeric field. If a default
+    /// already exists and differs, reports a default conflict error.
+    ///
+    /// # Arguments
+    ///
+    /// * `field` - The name of the field to set the default for
+    /// * `default` - The default numeric value
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use policyai::Report;
+    /// # use claudius::MessageParam;
+    /// let mut report = Report::new(vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
+    /// report.report_number_default("score", 0);
+    /// ```
     pub fn report_number_default(&mut self, field: &str, default: impl Into<serde_json::Number>) {
         let default = default.into();
         let build = self.default.get_or_insert_with(|| {
@@ -175,6 +314,26 @@ impl Report {
         }
     }
 
+    /// Report a numeric value from a policy application.
+    ///
+    /// Records a numeric value extracted by a policy and handles conflicts
+    /// according to the specified conflict resolution strategy.
+    ///
+    /// # Arguments
+    ///
+    /// * `policy_index` - The index of the policy reporting this value
+    /// * `field` - The name of the field being reported
+    /// * `value` - The numeric value to report
+    /// * `on_conflict` - Strategy for handling conflicts with existing values
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use policyai::{Report, OnConflict};
+    /// # use claudius::MessageParam;
+    /// let mut report = Report::new(vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
+    /// report.report_number(1, "priority", 10, OnConflict::LargestValue);
+    /// ```
     pub fn report_number(
         &mut self,
         policy_index: usize,
@@ -238,6 +397,24 @@ impl Report {
         }
     }
 
+    /// Report a default string value for a field.
+    ///
+    /// Sets or validates the default value for a string field. If a default
+    /// already exists and differs, reports a default conflict error.
+    ///
+    /// # Arguments
+    ///
+    /// * `field` - The name of the field to set the default for
+    /// * `default` - The default string value
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use policyai::Report;
+    /// # use claudius::MessageParam;
+    /// let mut report = Report::new(vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
+    /// report.report_string_default("category", "unknown");
+    /// ```
     pub fn report_string_default(&mut self, field: &str, default: impl Into<String>) {
         let default = default.into();
         let build = self.default.get_or_insert_with(|| {
@@ -258,6 +435,26 @@ impl Report {
         }
     }
 
+    /// Report a string value from a policy application.
+    ///
+    /// Records a string value extracted by a policy and handles conflicts
+    /// according to the specified conflict resolution strategy.
+    ///
+    /// # Arguments
+    ///
+    /// * `policy_index` - The index of the policy reporting this value
+    /// * `field` - The name of the field being reported
+    /// * `value` - The string value to report
+    /// * `on_conflict` - Strategy for handling conflicts with existing values
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use policyai::{Report, OnConflict};
+    /// # use claudius::MessageParam;
+    /// let mut report = Report::new(vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
+    /// report.report_string(1, "title", "Important Message".to_string(), OnConflict::Agreement);
+    /// ```
     pub fn report_string(
         &mut self,
         policy_index: usize,
@@ -317,6 +514,26 @@ impl Report {
         }
     }
 
+    /// Report a string enum value from a policy application.
+    ///
+    /// Records a string enum value extracted by a policy and handles conflicts
+    /// according to the specified conflict resolution strategy.
+    ///
+    /// # Arguments
+    ///
+    /// * `policy_index` - The index of the policy reporting this value
+    /// * `field` - The name of the field being reported
+    /// * `value` - The enum value to report
+    /// * `on_conflict` - Strategy for handling conflicts with existing values
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use policyai::{Report, OnConflict};
+    /// # use claudius::MessageParam;
+    /// let mut report = Report::new(vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
+    /// report.report_string_enum(1, "status", "active".to_string(), OnConflict::LargestValue);
+    /// ```
     pub fn report_string_enum(
         &mut self,
         policy_index: usize,
@@ -380,6 +597,26 @@ impl Report {
         }
     }
 
+    /// Report a string array element from a policy application.
+    ///
+    /// Adds a string value to an array field. If the field doesn't exist,
+    /// creates a new array. Duplicates are automatically filtered out.
+    ///
+    /// # Arguments
+    ///
+    /// * `policy_index` - The index of the policy reporting this value
+    /// * `field` - The name of the array field being reported to
+    /// * `value` - The string value to add to the array
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use policyai::Report;
+    /// # use claudius::MessageParam;
+    /// let mut report = Report::new(vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
+    /// report.report_string_array(1, "tags", "urgent".to_string());
+    /// report.report_string_array(1, "tags", "important".to_string());
+    /// ```
     pub fn report_string_array(&mut self, policy_index: usize, field: &str, value: String) {
         self.report_policy_index(policy_index);
         let build = self.value.get_or_insert_with(|| {
@@ -399,6 +636,25 @@ impl Report {
         self.rules_matched.push(policy_index);
     }
 
+    /// Report an invariant violation error.
+    ///
+    /// Records a programming error where an internal assumption was violated,
+    /// typically indicating a bug in the policy application logic.
+    ///
+    /// # Arguments
+    ///
+    /// * `file` - The source file where the violation occurred
+    /// * `line` - The line number where the violation occurred
+    /// * `message` - A description of the invariant that was violated
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use policyai::Report;
+    /// # use claudius::MessageParam;
+    /// let mut report = Report::new(vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
+    /// report.report_invariant_violation(file!(), line!(), "unexpected null value");
+    /// ```
     pub fn report_invariant_violation(&mut self, file: &str, line: u32, message: &str) {
         self.errors.push(PolicyError::InvariantViolation {
             file: file.to_string(),
@@ -407,6 +663,25 @@ impl Report {
         });
     }
 
+    /// Report a type check failure error.
+    ///
+    /// Records an error where the LLM provided data that doesn't match the
+    /// expected type for a field, such as a string where a number was expected.
+    ///
+    /// # Arguments
+    ///
+    /// * `file` - The source file where the failure occurred
+    /// * `line` - The line number where the failure occurred
+    /// * `message` - A description of the type check failure
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use policyai::Report;
+    /// # use claudius::MessageParam;
+    /// let mut report = Report::new(vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
+    /// report.report_type_check_failure(file!(), line!(), "expected boolean, got string");
+    /// ```
     pub fn report_type_check_failure(&mut self, file: &str, line: u32, message: &str) {
         self.errors.push(PolicyError::TypeCheckFailure {
             file: file.to_string(),
