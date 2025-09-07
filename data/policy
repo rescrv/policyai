@@ -4,4 +4,5 @@ type policyai::EmailPolicy {
     category: ["ai", "distributed systems", "other"] @ agreement = "other",
     template: string @ agreement,
     labels: [string],
+    points: number @ largest wins
 }

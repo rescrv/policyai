@@ -2,20 +2,13 @@ use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader};
 
 use arrrg::CommandLine;
+use claudius::Anthropic;
 use rand::prelude::*;
 
 #[derive(Clone, Default, Debug, Eq, PartialEq, arrrg_derive::CommandLine)]
 struct Options {
-    #[arrrg(optional, "The ollama host to connect to.")]
-    host: Option<String>,
-    #[arrrg(required, "This many text will be selected to have policies applied.")]
-    samples: usize,
-    #[arrrg(required, "This many policies will be selected per text.")]
+    #[arrrg(required, "This many negative policies will be selected per text.")]
     policies: usize,
-    #[arrrg(required, "The model to use for generating policies.")]
-    model: String,
-    #[arrrg(nested)]
-    param: yammer::Parameters,
     #[arrrg(
         required,
         "The number of successful verifications required to select a policy."
@@ -37,6 +30,10 @@ async fn main() -> Result<(), std::io::Error> {
         eprintln!("expected SEMANTIC-INJECTIONS");
         std::process::exit(13);
     }
+    let client = Anthropic::new(None)
+        .expect("could not connect to claude")
+        .with_max_retries(10)
+        .with_backoff_params(10.0, 1.0);
     let semantic_injections_file =
         BufReader::new(OpenOptions::new().read(true).open(&free[0]).unwrap());
     let mut semantic_injections = vec![];
@@ -48,48 +45,24 @@ async fn main() -> Result<(), std::io::Error> {
         semantic_injections.push(injection);
     }
     let mut rng = rand::rng();
-    for sample_number in 0..options.samples {
-        eprintln!("done {} samples", sample_number);
-        let injection = semantic_injections.choose(&mut rng).unwrap();
+    for (sample_number, injection) in semantic_injections.into_iter().enumerate() {
+        eprintln!("done {sample_number} samples");
         let mut negatives: Vec<String> = vec![];
         while negatives.len() < options.policies {
-            eprintln!("generated {} negatives", negatives.len());
             let policy_fragment = policy_fragments.choose(&mut rng).unwrap();
-            let mut successes = 0;
-            let mut failures = 0;
-            while successes < options.success && successes + failures < options.total {
-                let negative_applies = !policyai::data::policy_applies(
-                    None,
-                    yammer::GenerateRequest {
-                        model: options.model.to_string(),
-                        prompt: "".to_string(),
-                        format: None,
-                        images: None,
-                        keep_alive: None,
-                        suffix: None,
-                        system: None,
-                        template: None,
-                        stream: Some(false),
-                        raw: None,
-                        options: Some(options.param.clone().into()),
-                    },
-                    &injection.text,
-                    policy_fragment,
-                    options.success,
-                    options.total,
-                )
-                .await
-                .unwrap();
-                if negative_applies {
-                    successes += 1;
-                } else {
-                    failures += 1;
-                }
-                eprintln!("done {} negative tests", successes + failures);
-            }
-            if successes >= options.success {
+            if policyai::data::policy_does_not_apply(
+                &client,
+                &injection.text,
+                policy_fragment,
+                options.success,
+                options.total,
+            )
+            .await
+            .unwrap()
+            {
                 negatives.push(policy_fragment.clone());
             }
+            eprintln!("generated {} negatives", negatives.len());
         }
         println!(
             "{}",

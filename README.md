@@ -3,7 +3,11 @@
 Unstructured data is everywhere.  PolicyAI is a framework for turning unstructured data into
 structured data via unstructured policies.  Given a structure for data (a type declaration) the
 PolicyAI framework makes it possible to write policies that transform an unstructured input into a
-structured output.
+the typed, structured output.
+
+It is indeed a refinement of structured outputs such that:
+- Composable statements yield compatible outputs.
+- Conflicting statements are detected.
 
 For example, consider a simple policy about what should happen with an email.  We basically know
 that we want to mark the email read/unread, categorize and label it, prioritize human interaction

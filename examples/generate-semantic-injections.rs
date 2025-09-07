@@ -2,20 +2,17 @@ use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader};
 
 use arrrg::CommandLine;
+use claudius::{
+    Anthropic, CacheControlEphemeral, KnownModel, Model, SystemPrompt, TextBlock, ThinkingConfig,
+};
 use rand::prelude::*;
 
 #[derive(Clone, Default, Debug, Eq, PartialEq, arrrg_derive::CommandLine)]
 struct Options {
-    #[arrrg(optional, "The ollama host to connect to.")]
-    host: Option<String>,
     #[arrrg(required, "This many texts will be selected to have policies applied.")]
     samples: usize,
     #[arrrg(required, "This many policies will be selected per text.")]
     policies: usize,
-    #[arrrg(required, "The model to use for generating policies.")]
-    model: String,
-    #[arrrg(nested)]
-    param: yammer::Parameters,
     #[arrrg(
         required,
         "The number of successful verifications required to select a policy."
@@ -29,12 +26,11 @@ struct Options {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), std::io::Error> {
-    let (options, free) = Options::from_command_line_relaxed(
-        "USAGE: policyai-generate-semantic-injections [OPTIONS] TWEETS",
-    );
+async fn main() -> Result<(), claudius::Error> {
+    let (options, free) =
+        Options::from_command_line_relaxed("USAGE: generate-semantic-injections [OPTIONS] TEXTS");
     if free.len() != 1 {
-        eprintln!("expected TWEETS");
+        eprintln!("expected TEXTS");
         std::process::exit(13);
     }
     let texts_file = BufReader::new(OpenOptions::new().read(true).open(&free[0]).unwrap());
@@ -52,24 +48,27 @@ async fn main() -> Result<(), std::io::Error> {
         }
     }
     let mut rng = rand::rng();
+    let client = Anthropic::new(None).expect("could not connect to claude");
     for _ in 0..options.samples {
         let text = texts.choose(&mut rng).unwrap();
         let mut injections: Vec<String> = vec![];
+        let mut rationales: Vec<String> = vec![];
         while injections.len() < options.policies {
             let system = r#"
-A user is developing an application for custom policy-driven extraction of information from a stream
-of texts.  To do this, they will specify in plain language a pattern that matches the text and an
-action to perform when the pattern specified in the rule matches.
+You are an expert writer.  We are developing an instruction-processing engine that takes as input
+instructions and text to output JSON.  Every instruction has two parts, first it has the _semantic
+injection_.  This is natural language text that says something about the content being processed.
+Second, an instruction has an associated output.  This, too, is a natural language text but it says
+something about the JSON we are constructing.
 
-Your job is to write a sample policy for a given text.  I will give you the text and you will
-give me an English sentence that specifies some property of the text.
+Our task for now is to take text and generate a semantic injection for it.
 
 Restrictions:
 - Provide just one sentence of response.
 - Do not provide any pro-forma formatting or exposition.
-- Provide your response in active voice with straightforward instructions, e.g., "Policy:  The text
-  is about deep learning and neural networks."
-- Do not provide instructions for what to extract.  Your responsibility is limited to simply
+- Provide your response in active voice with straightforward instructions, e.g., "The text is about
+  deep learning and neural networks."
+- Do not provide instructions for what to output.  Your responsibility is limited to simply
   specifying the pattern of text to match using natural language.
 - Do not tell me why you chose the policy.
 "#
@@ -80,66 +79,54 @@ Text:
 {text}
 "#
             );
-            let req = yammer::GenerateRequest {
-                model: options.model.clone(),
-                prompt,
-                format: None,
-                images: None,
-                keep_alive: None,
-                suffix: None,
-                system: Some(system.clone()),
-                template: None,
-                stream: Some(false),
-                raw: None,
-                options: Some(options.param.clone().into()),
+            let req = claudius::MessageCreateParams {
+                max_tokens: 2048,
+                messages: vec![prompt.into()],
+                model: Model::Known(KnownModel::ClaudeSonnet40),
+                metadata: None,
+                stop_sequences: None,
+                system: Some(SystemPrompt::from_blocks(vec![TextBlock {
+                    text: system.to_string(),
+                    cache_control: Some(CacheControlEphemeral::new()),
+                    citations: None,
+                }])),
+                temperature: None,
+                thinking: Some(ThinkingConfig::enabled(1024)),
+                tool_choice: None,
+                tools: None,
+                top_k: None,
+                top_p: None,
+                stream: false,
             };
-            let resp = req
-                .make_request(&yammer::ollama_host(options.host.clone()))
-                .send()
-                .await
-                .unwrap()
-                .error_for_status()
-                .unwrap()
-                .json::<yammer::GenerateResponse>()
-                .await
-                .unwrap();
-            if resp.response.contains("\n\n") {
-                continue;
+            let resp = client.send(req).await?;
+            let mut injection = String::new();
+            let mut thought = String::new();
+            for content in resp.content.iter() {
+                match content {
+                    claudius::ContentBlock::Text(t) => injection.push_str(&t.text),
+                    claudius::ContentBlock::Thinking(t) => thought.push_str(&t.thinking),
+                    _ => {}
+                }
             }
-            let mut response = resp.response;
-            while let Some(r) = response.strip_prefix("Policy:") {
-                response = r.trim().to_string();
-            }
+            eprintln!("text: {text}\ninjection: {injection}\nthought: {thought}\n");
             if policyai::data::policy_applies(
-                None,
-                yammer::GenerateRequest {
-                    model: options.model.to_string(),
-                    prompt: "".to_string(),
-                    format: None,
-                    images: None,
-                    keep_alive: None,
-                    suffix: None,
-                    system: None,
-                    template: None,
-                    stream: Some(false),
-                    raw: None,
-                    options: Some(options.param.clone().into()),
-                },
+                &client,
                 text,
-                &response,
+                &injection,
                 options.success,
                 options.total,
             )
-            .await
-            .unwrap()
+            .await?
             {
-                injections.push(response);
+                injections.push(injection);
+                rationales.push(thought);
             }
         }
         println!(
             "{}",
             serde_json::to_string(&policyai::data::SemanticInjection {
                 injections,
+                rationales,
                 text: text.to_string()
             })
             .unwrap()

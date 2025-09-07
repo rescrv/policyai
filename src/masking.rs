@@ -6,7 +6,7 @@ pub struct MaskGenerator {
 }
 
 impl MaskGenerator {
-    const LENGTH: usize = 7;
+    const LENGTH: usize = 6;
     const MODULUS: u128 = 3404825447;
     const PRIME: u128 = 3404825407;
     const BASE: usize = 23;
@@ -54,16 +54,16 @@ mod tests {
     #[test]
     fn first_ten_masks() {
         let mut masks = MaskGenerator::default();
-        assert_eq!("fpXHcCM", masks.generate());
-        assert_eq!("pgXrqFP", masks.generate());
-        assert_eq!("fJpQVmV", masks.generate());
-        assert_eq!("vFRWmjC", masks.generate());
-        assert_eq!("rfwwgqj", masks.generate());
-        assert_eq!("gpjCvph", masks.generate());
-        assert_eq!("ccpjVGX", masks.generate());
-        assert_eq!("hMmmFph", masks.generate());
-        assert_eq!("pFFHvcc", masks.generate());
-        assert_eq!("jrGjMcH", masks.generate());
+        assert_eq!("fpXHcC", masks.generate());
+        assert_eq!("pgXrqF", masks.generate());
+        assert_eq!("fJpQVm", masks.generate());
+        assert_eq!("vFRWmj", masks.generate());
+        assert_eq!("rfwwgq", masks.generate());
+        assert_eq!("gpjCvp", masks.generate());
+        assert_eq!("ccpjVG", masks.generate());
+        assert_eq!("hMmmFp", masks.generate());
+        assert_eq!("pFFHvc", masks.generate());
+        assert_eq!("jrGjMc", masks.generate());
     }
 
     #[test]
