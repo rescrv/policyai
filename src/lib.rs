@@ -108,21 +108,6 @@ impl From<t64> for serde_json::Value {
 
 //////////////////////////////////////////// Number Helpers ///////////////////////////////////////
 
-/// Compare two JSON numbers for equality across different number types.
-///
-/// This function handles comparison between different JSON number types (u64, i64, f64)
-/// by converting to f64 when types differ, enabling cross-type numeric equality checks.
-///
-/// # Examples
-///
-/// ```
-/// use serde_json::Number;
-/// # use policyai::number_is_equal;
-///
-/// let int_num = Number::from(42);
-/// let float_num = Number::from_f64(42.0).unwrap();
-/// assert!(number_is_equal(&int_num, &float_num));
-/// ```
 fn number_is_equal(lhs: &serde_json::Number, rhs: &serde_json::Number) -> bool {
     if lhs.is_f64() && rhs.is_f64() {
         lhs.as_f64() == rhs.as_f64()
@@ -139,21 +124,6 @@ fn number_is_equal(lhs: &serde_json::Number, rhs: &serde_json::Number) -> bool {
     }
 }
 
-/// Compare two JSON numbers to determine if the first is less than the second.
-///
-/// This function handles comparison between different JSON number types (u64, i64, f64)
-/// by converting to f64 when types differ, enabling cross-type numeric ordering.
-///
-/// # Examples
-///
-/// ```
-/// use serde_json::Number;
-/// # use policyai::number_less_than;
-///
-/// let smaller = Number::from(41);
-/// let larger = Number::from_f64(42.5).unwrap();
-/// assert!(number_less_than(&smaller, &larger));
-/// ```
 fn number_less_than(lhs: &serde_json::Number, rhs: &serde_json::Number) -> bool {
     if lhs.is_f64() && rhs.is_f64() {
         lhs.as_f64() < rhs.as_f64()

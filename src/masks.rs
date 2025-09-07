@@ -78,7 +78,12 @@ impl BoolMask {
     /// # Example
     ///
     /// ```
-    /// # use policyai::{BoolMask, OnConflict, Report};\n    /// # use claudius::MessageParam;\n    /// let mask = BoolMask::new(1, \"urgent\".to_string(), \"field_abc\".to_string(), false, true, OnConflict::Default);\n    /// let ir = serde_json::json!({\"field_abc\": true});\n    /// let mut report = Report::new(vec![], vec![], vec![], vec![], vec![], vec![], vec![]);\n    /// mask.apply_to(&ir, &mut report);\n    /// ```
+    /// # use policyai::{BoolMask, OnConflict, Report};
+    /// let mask = BoolMask::new(1, "urgent".to_string(), "field_abc".to_string(), false, true, OnConflict::Default);
+    /// let ir = serde_json::json!({"field_abc": true});
+    /// let mut report = Report::new(vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
+    /// mask.apply_to(&ir, &mut report);
+    /// ```
     pub fn apply_to(&self, ir: &serde_json::Value, report: &mut Report) {
         match ir.get(&self.mask) {
             Some(serde_json::Value::Bool(ret)) => {
@@ -182,8 +187,8 @@ impl NumberMask {
     /// ```
     /// # use policyai::{NumberMask, OnConflict, Report, t64};
     /// # use claudius::MessageParam;
-    /// let mask = NumberMask::new(1, \"score\".to_string(), \"field_num\".to_string(), Some(t64(0.0)), OnConflict::Default);
-    /// let ir = serde_json::json!({\"field_num\": 42});
+    /// let mask = NumberMask::new(1, "score".to_string(), "field_num".to_string(), Some(t64(0.0)), serde_json::Number::from(42), OnConflict::Default);
+    /// let ir = serde_json::json!({"field_num": 42});
     /// let mut report = Report::new(vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
     /// mask.apply_to(&ir, &mut report);
     /// ```
@@ -301,8 +306,8 @@ impl StringMask {
     /// ```
     /// # use policyai::{StringMask, OnConflict, Report};
     /// # use claudius::MessageParam;
-    /// let mask = StringMask::new(1, \"title\".to_string(), \"field_str\".to_string(), None, \"important\".to_string(), OnConflict::Default);
-    /// let ir = serde_json::json!({\"field_str\": \"important\"});
+    /// let mask = StringMask::new(1, "title".to_string(), "field_str".to_string(), None, "important".to_string(), OnConflict::Default);
+    /// let ir = serde_json::json!({"field_str": "important"});
     /// let mut report = Report::new(vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
     /// mask.apply_to(&ir, &mut report);
     /// ```
@@ -392,8 +397,8 @@ impl StringArrayMask {
     /// ```
     /// # use policyai::{StringArrayMask, Report};
     /// # use claudius::MessageParam;
-    /// let mask = StringArrayMask::new(1, \"tags\".to_string(), \"field_arr\".to_string(), vec![]);
-    /// let ir = serde_json::json!({\"field_arr\": [\"tag1\", \"tag2\"]});
+    /// let mask = StringArrayMask::new(1, "tags".to_string(), "field_arr".to_string(), vec![]);
+    /// let ir = serde_json::json!({"field_arr": ["tag1", "tag2"]});
     /// let mut report = Report::new(vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
     /// mask.apply_to(&ir, &mut report);
     /// ```
@@ -513,8 +518,8 @@ impl StringEnumMask {
     /// ```
     /// # use policyai::{StringEnumMask, OnConflict, Report};
     /// # use claudius::MessageParam;
-    /// let mask = StringEnumMask::new(1, \"priority\".to_string(), \"field_enum\".to_string(), \"high\".to_string(), None, OnConflict::Default);
-    /// let ir = serde_json::json!({\"field_enum\": true});
+    /// let mask = StringEnumMask::new(1, "priority".to_string(), "field_enum".to_string(), "high".to_string(), None, OnConflict::Default);
+    /// let ir = serde_json::json!({"field_enum": true});
     /// let mut report = Report::new(vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
     /// mask.apply_to(&ir, &mut report);
     /// ```
