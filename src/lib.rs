@@ -42,6 +42,9 @@ use std::cmp::Ordering;
 /// Data structures and utilities for test data
 pub mod data;
 
+/// Analysis tools for evaluation metrics
+pub mod analysis;
+
 mod errors;
 mod field;
 mod manager;
