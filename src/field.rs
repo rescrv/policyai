@@ -10,7 +10,7 @@ use crate::{t64, OnConflict};
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
 /// use policyai::{Field, OnConflict};
 ///
 /// let field = Field::Bool {
