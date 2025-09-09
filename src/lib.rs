@@ -397,7 +397,7 @@ To: jeff@example.org
 
 This is an email about AI.
         "#,
-                &mut None,
+                None,
             )
             .await
             .expect("manager should produce a JSON value");
