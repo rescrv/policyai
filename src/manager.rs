@@ -41,7 +41,7 @@ use crate::{ApplyError, Policy, Report, ReportBuilder, Usage};
 ///     &client,
 ///     template,
 ///     "unstructured text data",
-///     &mut usage
+///     usage.as_mut()
 /// ).await?;
 /// # Ok(())
 /// # }
@@ -97,7 +97,7 @@ impl Manager {
         client: &Anthropic,
         template: MessageCreateParams,
         unstructured_data: &str,
-        usage: &mut Option<Usage>,
+        mut usage: Option<&mut Usage>,
     ) -> Result<Report, ApplyError> {
         let start_time = Instant::now();
         let (report, mut req) = self.request_for(template, unstructured_data).await?;
@@ -105,17 +105,17 @@ impl Manager {
         let mut last_error = String::new();
 
         // Initialize usage tracking if provided
-        if let Some(ref mut u) = usage {
-            *u = Usage::new();
+        if let Some(usage) = &mut usage {
+            **usage = Usage::new();
         }
 
         for attempt in 1..=max_attempts {
             let resp = client.send(req.clone()).await?;
 
             // Track usage if provided
-            if let Some(ref mut u) = usage {
-                u.add_claudius_usage(resp.usage);
-                u.increment_iterations();
+            if let Some(usage) = &mut usage {
+                usage.add_claudius_usage(resp.usage);
+                usage.increment_iterations();
             }
             if resp.content.len() != 1 {
                 return Err(ApplyError::invalid_response(
@@ -149,8 +149,8 @@ impl Manager {
             reportedly_matched.dedup();
             if *empirically_matched == reportedly_matched {
                 // Set final wall clock time
-                if let Some(ref mut u) = usage {
-                    u.set_wall_clock_time(start_time.elapsed());
+                if let Some(usage) = &mut usage {
+                    usage.set_wall_clock_time(start_time.elapsed());
                 }
                 return Ok(report);
             }
@@ -221,8 +221,8 @@ impl Manager {
             );
         }
         // Set final wall clock time even on error
-        if let Some(ref mut u) = usage {
-            u.set_wall_clock_time(start_time.elapsed());
+        if let Some(usage) = &mut usage {
+            usage.set_wall_clock_time(start_time.elapsed());
         }
         Err(ApplyError::too_many_iterations(max_attempts, last_error))
     }

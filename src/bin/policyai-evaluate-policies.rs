@@ -15,7 +15,7 @@ pub async fn naive_apply(
     policies: &[Policy],
     template: &MessageCreateParams,
     text: &str,
-    usage: &mut Option<Usage>,
+    usage: Option<&mut Usage>,
 ) -> Result<serde_json::Value, ApplyError> {
     let mut req = template.clone();
     req.metadata = Some(Metadata {
@@ -98,7 +98,7 @@ pub async fn naive_apply(
     let resp = client.send(req).await?;
 
     // Track usage if provided
-    if let Some(ref mut u) = usage {
+    if let Some(u) = usage {
         *u = Usage::new();
         u.add_claudius_usage(resp.usage);
         u.increment_iterations();
@@ -250,7 +250,7 @@ async fn main() {
                     ..Default::default()
                 },
                 &point.text,
-                &mut baseline_usage,
+                baseline_usage.as_mut(),
             )
             .await
             {
@@ -285,7 +285,7 @@ async fn main() {
                         ..Default::default()
                     },
                     &point.text,
-                    &mut policyai_usage,
+                    policyai_usage.as_mut(),
                 )
                 .await
             {
