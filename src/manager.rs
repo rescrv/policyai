@@ -293,6 +293,13 @@ impl Manager {
             &mut req.messages,
             MessageParam::new_with_string(format!("<text>{text}</text>"), MessageRole::User),
         );
+        push_or_merge_message(
+            &mut req.messages,
+            MessageParam::new_with_string(
+                include_str!("../prompts/manager_suffix.md").to_string(),
+                MessageRole::User,
+            ),
+        );
         req.tool_choice = Some(ToolChoice::tool("output_json"));
         req.tools = Some(vec![claudius::ToolUnionParam::CustomTool(
             claudius::ToolParam {

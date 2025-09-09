@@ -503,12 +503,7 @@ mod tests {
         };
 
         let displayed = format!("{original}");
-        println!("Displayed with conflicts: {displayed}"); // TODO(claude): cleanup this output
-        let parse_result = PolicyType::parse(&displayed);
-        if let Err(ref e) = parse_result {
-            println!("Parse error: {e:?}"); // TODO(claude): cleanup this output
-        }
-        let parsed = parse_result.expect("Failed to parse displayed PolicyType");
+        let parsed = PolicyType::parse(&displayed).expect("Failed to parse displayed PolicyType");
         assert_eq!(original, parsed);
     }
 
@@ -517,9 +512,7 @@ mod tests {
         let input = r#"type Test {
     field1: bool = true,
 }"#;
-        println!("Parsing: {input}"); // TODO(claude): cleanup this output
-        let pt = PolicyType::parse(input).expect("Failed to parse simple bool with default");
-        println!("Parsed successfully: {pt:?}"); // TODO(claude): cleanup this output
+        let _pt = PolicyType::parse(input).expect("Failed to parse simple bool with default");
     }
 
     #[test]
@@ -527,9 +520,7 @@ mod tests {
         let input = r#"type Test {
     field2: string @ agreement = "test",
 }"#;
-        println!("Parsing: {input}"); // TODO(claude): cleanup this output
-        let pt = PolicyType::parse(input).expect("Failed to parse string with agreement conflict");
-        println!("Parsed successfully: {pt:?}"); // TODO(claude): cleanup this output
+        let _pt = PolicyType::parse(input).expect("Failed to parse string with agreement conflict");
     }
 
     #[test]
@@ -539,9 +530,7 @@ mod tests {
     field2: string @ agreement = "test",
     field3: number @ last wins = 100,
 }"#;
-        println!("Parsing exact case: {input}"); // TODO(claude): cleanup this output
-        let pt = PolicyType::parse(input).expect("Failed to parse exact failing case");
-        println!("Parsed successfully: {pt:?}"); // TODO(claude): cleanup this output
+        let _pt = PolicyType::parse(input).expect("Failed to parse exact failing case");
     }
 
     #[test]

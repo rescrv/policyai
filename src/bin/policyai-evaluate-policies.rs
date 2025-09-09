@@ -386,9 +386,12 @@ mod tests {
         assert_eq!(metrics.policyai_fields_with_wrong_value, 1);
         assert_eq!(metrics.policyai_fields_missing, 2);
         assert_eq!(metrics.policyai_extra_fields, 1);
-        // TODO(claude): baseline_*
-        // TODO(claude): policyai_error
-        // TODO(claude): baseline_error
+        assert_eq!(metrics.baseline_fields_matched, 2);
+        assert_eq!(metrics.baseline_fields_with_wrong_value, 2);
+        assert_eq!(metrics.baseline_fields_missing, 3);
+        assert_eq!(metrics.baseline_extra_fields, 0);
+        assert_eq!(metrics.policyai_error, Some("error1".to_string()));
+        assert_eq!(metrics.baseline_error, Some("error2".to_string()));
         assert_eq!(metrics.policyai_apply_duration_ms, 100);
         assert_eq!(metrics.baseline_apply_duration_ms, 200);
     }
