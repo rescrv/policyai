@@ -1,6 +1,6 @@
 [package]
 name = "policyai"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Robert Escriva <robert@rescrv.net>"]
 edition = "2021"
 description = "PolicyAI provides a mechanism for unstructured, composable policies that transform unstructured text into structured outputs."
