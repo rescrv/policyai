@@ -632,6 +632,19 @@ impl Report {
         }
     }
 
+    /// Initialize an empty string array for a field in the report.
+    pub fn init_empty_string_array(&mut self, policy_index: usize, field: &str) {
+        self.report_policy_index(policy_index);
+        let build = self.value.get_or_insert_with(|| {
+            serde_json::json! {{}}
+        });
+        build
+            .as_object_mut()
+            .unwrap()
+            .entry(field)
+            .or_insert_with(|| serde_json::Value::Array(vec![]));
+    }
+
     fn report_policy_index(&mut self, policy_index: usize) {
         self.rules_matched.push(policy_index);
     }
