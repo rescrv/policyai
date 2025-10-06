@@ -3,12 +3,12 @@ use std::io::{BufRead, BufReader};
 use std::time::Instant;
 
 use claudius::{
-    push_or_merge_message, Anthropic, ContentBlock, JsonSchema, KnownModel, MessageCreateParams,
-    MessageParam, MessageRole, Metadata, Model, SystemPrompt, TextBlock, ToolChoice,
+    push_or_merge_message, Anthropic, ContentBlock, JsonSchema, MessageCreateParams, MessageParam,
+    MessageRole, Metadata, Model, SystemPrompt, TextBlock, ToolChoice,
 };
 
 use policyai::data::{EvaluationReport, Metrics, TestDataPoint};
-use policyai::{ApplyError, Field, Manager, Policy, Usage};
+use policyai::{ApplyError, Field, Manager, Policy, Report, Usage};
 
 pub async fn naive_apply(
     client: &Anthropic,
@@ -246,7 +246,8 @@ async fn main() {
                 &client,
                 &point.policies,
                 &MessageCreateParams {
-                    max_tokens: 2048,
+                    max_tokens: 4096,
+                    model: Model::Custom("claude-sonnet-4-5".to_string()),
                     ..Default::default()
                 },
                 &point.text,
@@ -276,12 +277,12 @@ async fn main() {
             // Run policyai
             let mut policyai_usage = Some(Usage::new());
             let start = Instant::now();
-            let output = match manager
+            let report = match manager
                 .apply(
                     &client,
                     MessageCreateParams {
-                        max_tokens: 2048,
-                        model: Model::Known(KnownModel::ClaudeSonnet40),
+                        max_tokens: 4096,
+                        model: Model::Custom("claude-sonnet-4-5".to_string()),
                         ..Default::default()
                     },
                     &point.text,
@@ -289,16 +290,18 @@ async fn main() {
                 )
                 .await
             {
-                Ok(returned) => returned.value().clone(),
+                Ok(returned) => returned,
                 Err(err) => {
                     metrics.policyai_error = Some(format!("{err:?}"));
-                    serde_json::json! {{}}
+                    metrics.policyai_apply_duration_ms = start.elapsed().as_millis() as u32;
+                    Report::default()
                 }
             };
             metrics.policyai_apply_duration_ms = start.elapsed().as_millis() as u32;
             metrics.policyai_usage = policyai_usage;
 
             // Calculate policyai metrics if we have a result
+            let output = report.value().clone();
             let (matched, wrong, missing, extra) = calculate_field_metrics(&expected, &output);
             metrics.policyai_fields_matched = matched;
             metrics.policyai_fields_with_wrong_value = wrong;
@@ -309,6 +312,7 @@ async fn main() {
             let report = EvaluationReport {
                 input: point,
                 metrics,
+                report,
                 output,
                 baseline,
             };
@@ -333,6 +337,7 @@ mod tests {
                 conflicts: None,
             },
             metrics: Metrics::default(),
+            report: Report::default(),
             output: serde_json::Value::Null,
             baseline: None,
         };
@@ -728,6 +733,7 @@ mod tests {
                 policyai_usage: None,
                 baseline_usage: None,
             },
+            report: Report::default(),
             output: serde_json::json!({"enabled": true}),
             baseline: Some(serde_json::json!({"enabled": true})),
         };

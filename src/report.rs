@@ -9,7 +9,7 @@ use crate::{
 ///
 /// A Report tracks which rules matched, what values were extracted,
 /// and any conflicts or errors that occurred during policy application.
-#[derive(serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Default, serde::Deserialize, serde::Serialize)]
 pub struct Report {
     /// Messages that were used in the LLM conversation
     pub messages: Vec<MessageParam>,

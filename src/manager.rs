@@ -301,6 +301,10 @@ impl Manager {
             ),
         );
         req.tool_choice = Some(ToolChoice::tool("output_json"));
+        eprintln!(
+            "{}",
+            serde_json::to_string_pretty(&report.schema()).unwrap()
+        );
         req.tools = Some(vec![claudius::ToolUnionParam::CustomTool(
             claudius::ToolParam {
                 name: "output_json".to_string(),

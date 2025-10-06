@@ -65,11 +65,12 @@ impl ReportBuilder {
     /// builder.add_policy(&policy)?;
     /// # Ok::<(), policyai::PolicyError>(())
     /// ```
+    #[allow(clippy::result_large_err)]
     pub fn add_policy(&mut self, policy: &Policy) -> Result<(), PolicyError> {
         // Assume default=0, so we increment mask_index here (in case we throw out parts of it) and
         // increment policy_index at the end when we "commit".
         self.mask_index += 1;
-        let mut content = format!("Rule #{}:\nCriteria: {}", self.policy_index, policy.prompt);
+        let mut content = policy.prompt.clone();
 
         // Collect all changes first before applying them
         let mut new_bool_masks = Vec::new();
@@ -234,12 +235,12 @@ impl ReportBuilder {
             &mut self.messages,
             MessageParam {
                 role: MessageRole::User,
-                content: format!("<rule>{content}</rule>").into(),
+                content: format!("<rule index=\"{}\">{content}</rule>", self.policy_index).into(),
             },
         );
 
         // Extend collections instead of replacing
-        self.required.extend(new_required);
+        //self.required.extend(new_required);
         if let serde_json::Value::Object(props) = &mut self.properties {
             props.extend(new_properties);
         }
@@ -277,6 +278,7 @@ impl ReportBuilder {
     /// let report = builder.consume_ir(ir)?;
     /// # Ok::<(), policyai::ApplyError>(())
     /// ```
+    #[allow(clippy::result_large_err)]
     pub fn consume_ir(self, ir: serde_json::Value) -> Result<Report, ApplyError> {
         let mut report = Report::new(
             self.messages,
@@ -376,9 +378,13 @@ impl Default for ReportBuilder {
             default_return: serde_json::json! {{}},
             messages: vec![],
             policy_index: 1,
-            required: vec!["__rule_numbers__".to_string()],
+            required: vec![
+                "__rule_numbers__".to_string(),
+                "__justification__".to_string(),
+            ],
             properties: serde_json::json! {{
-                "__rule_numbers__": Vec::<f64>::json_schema(),
+                "__rule_numbers__": Vec::<u64>::json_schema(),
+                "__justification__": String::json_schema(),
             }},
         }
     }

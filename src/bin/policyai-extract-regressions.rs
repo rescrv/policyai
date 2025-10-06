@@ -1,47 +1,27 @@
+//! Extract regression entries where baseline passes but PolicyAI fails.
+//!
+//! This tool reads evaluation reports and outputs only those entries where:
+//! 1. The baseline output matches the expected output (baseline passes)
+//! 2. The PolicyAI output does not match the expected output (PolicyAI fails)
+//!
+//! This identifies true regressions where the baseline performs better than PolicyAI.
+
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 
 use arrrg::CommandLine;
-use policyai::data::{EvaluationReport, Metrics};
+use policyai::data::EvaluationReport;
 
-#[derive(Clone, Default, Debug, arrrg_derive::CommandLine)]
+#[derive(Clone, Default, Debug, Eq, PartialEq, arrrg_derive::CommandLine)]
 struct Args {
-    #[arrrg(optional, "Filter by non-zero values in this metrics field")]
-    metric: Option<String>,
+    #[arrrg(flag, "Include entries where both baseline and PolicyAI fail")]
+    include_baseline_failures: bool,
 
-    #[arrrg(optional, "Filter by error messages containing this substring")]
-    error: Option<String>,
+    #[arrrg(flag, "Ignore whitespace differences in string comparisons")]
+    ignore_whitespace: bool,
 
-    #[arrrg(optional, "Filter by input token count exceeding this value")]
-    usage_input_tokens: Option<i32>,
-
-    #[arrrg(optional, "Filter by output token count exceeding this value")]
-    usage_output_tokens: Option<i32>,
-
-    #[arrrg(
-        optional,
-        "Output only entries with fewer than this many policyai_fields_matched"
-    )]
-    policyai_fields_matched: Option<usize>,
-
-    #[arrrg(
-        optional,
-        "Output only entries with fewer than this many baseline_fields_matched"
-    )]
-    baseline_fields_matched: Option<usize>,
-}
-
-impl Eq for Args {}
-
-impl PartialEq for Args {
-    fn eq(&self, other: &Self) -> bool {
-        self.metric == other.metric
-            && self.error == other.error
-            && self.usage_input_tokens == other.usage_input_tokens
-            && self.usage_output_tokens == other.usage_output_tokens
-            && self.policyai_fields_matched == other.policyai_fields_matched
-            && self.baseline_fields_matched == other.baseline_fields_matched
-    }
+    #[arrrg(flag, "Ignore order in array comparisons")]
+    ignore_array_order: bool,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -50,7 +30,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     if free.is_empty() {
-        eprintln!("Expected at least one input file");
+        eprintln!("ERROR: Expected at least one input file");
+        eprintln!("USAGE: policyai-extract-regressions [OPTIONS] <input_file> [input_file...]");
         std::process::exit(1);
     }
 
@@ -62,11 +43,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn process_file(input_file: &str, args: &Args) -> Result<(), Box<dyn std::error::Error>> {
-    let file = File::open(input_file)?;
+    let file = File::open(input_file)
+        .map_err(|e| format!("Failed to open file '{}': {}", input_file, e))?;
     let reader = BufReader::new(file);
 
-    for line in reader.lines() {
-        let line = line?;
+    let mut line_number = 0;
+    for line_result in reader.lines() {
+        line_number += 1;
+        let line = line_result.map_err(|e| {
+            format!(
+                "Failed to read line {} from file '{}': {}",
+                line_number, input_file, e
+            )
+        })?;
+
         if line.trim().is_empty() {
             continue;
         }
@@ -74,12 +64,15 @@ fn process_file(input_file: &str, args: &Args) -> Result<(), Box<dyn std::error:
         let report: EvaluationReport = match serde_json::from_str(&line) {
             Ok(report) => report,
             Err(e) => {
-                eprintln!("Warning: Failed to parse line in {input_file} as EvaluationReport: {e}");
+                eprintln!(
+                    "Warning: Failed to parse line {} in file '{}' as EvaluationReport: {}",
+                    line_number, input_file, e
+                );
                 continue;
             }
         };
 
-        if matches_filters(&report, args) {
+        if is_regression(&report, args) {
             println!("{line}");
         }
     }
@@ -87,386 +80,458 @@ fn process_file(input_file: &str, args: &Args) -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
-fn matches_filters(report: &EvaluationReport, args: &Args) -> bool {
-    // Check metric filter
-    if let Some(ref metric_field) = args.metric {
-        if !matches_metric_filter(&report.metrics, metric_field) {
-            return false;
-        }
+/// Determine if this report represents a regression.
+/// A regression occurs when:
+/// 1. Baseline passes (baseline matches expected) AND PolicyAI fails (output doesn't match expected)
+/// 2. OR if --include-baseline-failures is set: both fail but we still want to see them
+fn is_regression(report: &EvaluationReport, args: &Args) -> bool {
+    // Skip if there's no expected value to compare against
+    let expected = match &report.input.expected {
+        Some(expected) => expected,
+        None => return false,
+    };
+
+    // Skip if there's no baseline to compare
+    let baseline = match &report.baseline {
+        Some(baseline) => baseline,
+        None => return false,
+    };
+
+    let policyai_passes = values_match(&report.output, expected, args);
+    let baseline_passes = values_match(baseline, expected, args);
+
+    // Primary case: baseline passes but PolicyAI fails (true regression)
+    if baseline_passes && !policyai_passes {
+        return true;
     }
 
-    // Check error filter
-    if let Some(ref error_substring) = args.error {
-        if !matches_error_filter(&report.metrics, error_substring) {
-            return false;
-        }
-    }
-
-    // Check input token filter
-    if let Some(min_input_tokens) = args.usage_input_tokens {
-        if !matches_input_token_filter(&report.metrics, min_input_tokens) {
-            return false;
-        }
-    }
-
-    // Check output token filter
-    if let Some(min_output_tokens) = args.usage_output_tokens {
-        if !matches_output_token_filter(&report.metrics, min_output_tokens) {
-            return false;
-        }
-    }
-
-    // Check policyai_fields_matched filter
-    if !matches_threshold_filter(args.policyai_fields_matched, || {
-        report.metrics.policyai_fields_matched
-    }) {
-        return false;
-    }
-
-    // Check baseline_fields_matched filter
-    if !matches_threshold_filter(args.baseline_fields_matched, || {
-        report.metrics.baseline_fields_matched
-    }) {
-        return false;
-    }
-
-    true
-}
-
-fn matches_threshold_filter<F>(threshold: Option<usize>, field_selector: F) -> bool
-where
-    F: FnOnce() -> usize,
-{
-    match threshold {
-        Some(threshold) => field_selector() < threshold,
-        None => true,
-    }
-}
-
-fn matches_metric_filter(metrics: &Metrics, field_name: &str) -> bool {
-    match field_name {
-        "policyai_fields_matched" => metrics.policyai_fields_matched > 0,
-        "baseline_fields_matched" => metrics.baseline_fields_matched > 0,
-        "policyai_fields_with_wrong_value" => metrics.policyai_fields_with_wrong_value > 0,
-        "baseline_fields_with_wrong_value" => metrics.baseline_fields_with_wrong_value > 0,
-        "policyai_fields_missing" => metrics.policyai_fields_missing > 0,
-        "baseline_fields_missing" => metrics.baseline_fields_missing > 0,
-        "policyai_extra_fields" => metrics.policyai_extra_fields > 0,
-        "baseline_extra_fields" => metrics.baseline_extra_fields > 0,
-        "policyai_apply_duration_ms" => metrics.policyai_apply_duration_ms > 0,
-        "baseline_apply_duration_ms" => metrics.baseline_apply_duration_ms > 0,
-        _ => {
-            eprintln!("Warning: Unknown metric field: {field_name}");
-            false
-        }
-    }
-}
-
-fn check_error_contains(error_opt: &Option<String>, substring: &str) -> bool {
-    error_opt
-        .as_ref()
-        .is_some_and(|error| error.contains(substring))
-}
-
-fn matches_error_filter(metrics: &Metrics, error_substring: &str) -> bool {
-    check_error_contains(&metrics.policyai_error, error_substring)
-        || check_error_contains(&metrics.baseline_error, error_substring)
-}
-
-fn matches_token_filter<F>(metrics: &Metrics, min_tokens: i32, field_selector: F) -> bool
-where
-    F: Fn(&claudius::Usage) -> i32,
-{
-    if let Some(ref usage) = metrics.policyai_usage {
-        if let Some(ref claudius_usage) = usage.claudius_usage {
-            if field_selector(claudius_usage) >= min_tokens {
-                return true;
-            }
-        }
-    }
-
-    if let Some(ref usage) = metrics.baseline_usage {
-        if let Some(ref claudius_usage) = usage.claudius_usage {
-            if field_selector(claudius_usage) >= min_tokens {
-                return true;
-            }
-        }
+    // Secondary case: include baseline failures if flag is set
+    if args.include_baseline_failures && !baseline_passes && !policyai_passes {
+        return true;
     }
 
     false
 }
 
-fn matches_input_token_filter(metrics: &Metrics, min_tokens: i32) -> bool {
-    matches_token_filter(metrics, min_tokens, |usage| usage.input_tokens)
+/// Compare two JSON values for semantic equality with configurable matching options.
+fn values_match(actual: &serde_json::Value, expected: &serde_json::Value, args: &Args) -> bool {
+    values_match_recursive(actual, expected, args)
 }
 
-fn matches_output_token_filter(metrics: &Metrics, min_tokens: i32) -> bool {
-    matches_token_filter(metrics, min_tokens, |usage| usage.output_tokens)
+fn values_match_recursive(
+    actual: &serde_json::Value,
+    expected: &serde_json::Value,
+    args: &Args,
+) -> bool {
+    match (actual, expected) {
+        // Numbers: apply 0.1% tolerance for floating point comparisons
+        (serde_json::Value::Number(a), serde_json::Value::Number(b)) => {
+            if let (Some(a_f64), Some(b_f64)) = (a.as_f64(), b.as_f64()) {
+                // Calculate 0.1% tolerance based on the expected value
+                let tolerance = b_f64.abs() * 0.001; // 0.1% = 0.001
+                (a_f64 - b_f64).abs() <= tolerance
+            } else {
+                // For integers or numbers that can't be converted to f64, use exact equality
+                a == b
+            }
+        }
+
+        // Strings: apply whitespace normalization if specified
+        (serde_json::Value::String(a), serde_json::Value::String(b)) => {
+            if args.ignore_whitespace {
+                normalize_whitespace(a) == normalize_whitespace(b)
+            } else {
+                a == b
+            }
+        }
+
+        // Arrays: apply order-independent comparison if specified
+        (serde_json::Value::Array(a), serde_json::Value::Array(b)) => {
+            if args.ignore_array_order {
+                arrays_match_unordered(a, b, args)
+            } else {
+                arrays_match_ordered(a, b, args)
+            }
+        }
+
+        // Objects: recursively compare all fields
+        (serde_json::Value::Object(a), serde_json::Value::Object(b)) => {
+            if a.len() != b.len() {
+                return false;
+            }
+            for (key, a_val) in a {
+                match b.get(key) {
+                    Some(b_val) => {
+                        if !values_match_recursive(a_val, b_val, args) {
+                            return false;
+                        }
+                    }
+                    None => return false,
+                }
+            }
+            true
+        }
+
+        // For all other types (null, bool), use exact equality
+        _ => actual == expected,
+    }
+}
+
+fn normalize_whitespace(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn arrays_match_ordered(a: &[serde_json::Value], b: &[serde_json::Value], args: &Args) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter()
+        .zip(b.iter())
+        .all(|(a_val, b_val)| values_match_recursive(a_val, b_val, args))
+}
+
+fn arrays_match_unordered(a: &[serde_json::Value], b: &[serde_json::Value], args: &Args) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+
+    // For each element in a, find a matching element in b
+    let mut b_used = vec![false; b.len()];
+    for a_val in a {
+        let mut found_match = false;
+        for (b_idx, b_val) in b.iter().enumerate() {
+            if !b_used[b_idx] && values_match_recursive(a_val, b_val, args) {
+                b_used[b_idx] = true;
+                found_match = true;
+                break;
+            }
+        }
+        if !found_match {
+            return false;
+        }
+    }
+    true
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use policyai::data::TestDataPoint;
+    use policyai::data::{Metrics, TestDataPoint};
+    use policyai::Report;
 
-    fn create_test_evaluation_report(
-        policyai_fields_matched: usize,
-        baseline_fields_matched: usize,
+    fn create_test_report(
+        expected: Option<serde_json::Value>,
+        policyai_output: serde_json::Value,
+        baseline_output: Option<serde_json::Value>,
     ) -> EvaluationReport {
         EvaluationReport {
             input: TestDataPoint {
                 text: "test".to_string(),
                 policies: vec![],
-                expected: None,
+                expected,
                 conflicts: None,
             },
-            metrics: Metrics {
-                policyai_fields_matched,
-                baseline_fields_matched,
-                ..Default::default()
-            },
-            output: serde_json::json!({}),
-            baseline: None,
+            metrics: Metrics::default(),
+            // Report is preserved only for inspection and debugging;
+            // the output is what's compared.
+            report: Report::default(),
+            output: policyai_output,
+            baseline: baseline_output,
         }
     }
 
-    fn create_args_with_policyai_threshold(threshold: usize) -> Args {
-        Args {
-            policyai_fields_matched: Some(threshold),
-            ..Default::default()
-        }
-    }
-
-    fn create_args_with_baseline_threshold(threshold: usize) -> Args {
-        Args {
-            baseline_fields_matched: Some(threshold),
-            ..Default::default()
-        }
-    }
-
-    fn create_args_with_both_thresholds(
-        policyai_threshold: usize,
-        baseline_threshold: usize,
-    ) -> Args {
-        Args {
-            policyai_fields_matched: Some(policyai_threshold),
-            baseline_fields_matched: Some(baseline_threshold),
-            ..Default::default()
-        }
-    }
-
-    // Test policyai_fields_matched filtering with threshold 0
     #[test]
-    fn policyai_threshold_0_excludes_all_entries() {
-        let args = create_args_with_policyai_threshold(0);
+    fn baseline_pass_policyai_fail_is_regression() {
+        let expected = serde_json::json!({"field1": "value1"});
+        let policyai_output = serde_json::json!({"field1": "wrong_value"});
+        let baseline_output = serde_json::json!({"field1": "value1"});
 
-        // Test with field value 0 - should be excluded since 0 >= 0
-        let report = create_test_evaluation_report(0, 0);
-        assert!(!matches_filters(&report, &args));
+        let report = create_test_report(Some(expected), policyai_output, Some(baseline_output));
 
-        // Test with field value 1 - should be excluded since 1 >= 0
-        let report = create_test_evaluation_report(1, 0);
-        assert!(!matches_filters(&report, &args));
-
-        // Test with field value 5 - should be excluded since 5 >= 0
-        let report = create_test_evaluation_report(5, 0);
-        assert!(!matches_filters(&report, &args));
-    }
-
-    // Test policyai_fields_matched filtering with threshold 1
-    #[test]
-    fn policyai_threshold_1_keeps_only_field_0() {
-        let args = create_args_with_policyai_threshold(1);
-
-        // Test with field value 0 - should pass since 0 < 1
-        let report = create_test_evaluation_report(0, 0);
-        assert!(matches_filters(&report, &args));
-
-        // Test with field value 1 - should be excluded since 1 >= 1
-        let report = create_test_evaluation_report(1, 0);
-        assert!(!matches_filters(&report, &args));
-
-        // Test with field value 2 - should be excluded since 2 >= 1
-        let report = create_test_evaluation_report(2, 0);
-        assert!(!matches_filters(&report, &args));
-    }
-
-    // Test policyai_fields_matched filtering with threshold 2
-    #[test]
-    fn policyai_threshold_2_keeps_field_0_and_1() {
-        let args = create_args_with_policyai_threshold(2);
-
-        // Test with field value 0 - should pass since 0 < 2
-        let report = create_test_evaluation_report(0, 0);
-        assert!(matches_filters(&report, &args));
-
-        // Test with field value 1 - should pass since 1 < 2
-        let report = create_test_evaluation_report(1, 0);
-        assert!(matches_filters(&report, &args));
-
-        // Test with field value 2 - should be excluded since 2 >= 2
-        let report = create_test_evaluation_report(2, 0);
-        assert!(!matches_filters(&report, &args));
-
-        // Test with field value 3 - should be excluded since 3 >= 2
-        let report = create_test_evaluation_report(3, 0);
-        assert!(!matches_filters(&report, &args));
-    }
-
-    // Test baseline_fields_matched filtering with threshold 0
-    #[test]
-    fn baseline_threshold_0_excludes_all_entries() {
-        let args = create_args_with_baseline_threshold(0);
-
-        // Test with field value 0 - should be excluded since 0 >= 0
-        let report = create_test_evaluation_report(0, 0);
-        assert!(!matches_filters(&report, &args));
-
-        // Test with field value 1 - should be excluded since 1 >= 0
-        let report = create_test_evaluation_report(0, 1);
-        assert!(!matches_filters(&report, &args));
-
-        // Test with field value 5 - should be excluded since 5 >= 0
-        let report = create_test_evaluation_report(0, 5);
-        assert!(!matches_filters(&report, &args));
-    }
-
-    // Test baseline_fields_matched filtering with threshold 1
-    #[test]
-    fn baseline_threshold_1_keeps_only_field_0() {
-        let args = create_args_with_baseline_threshold(1);
-
-        // Test with field value 0 - should pass since 0 < 1
-        let report = create_test_evaluation_report(0, 0);
-        assert!(matches_filters(&report, &args));
-
-        // Test with field value 1 - should be excluded since 1 >= 1
-        let report = create_test_evaluation_report(0, 1);
-        assert!(!matches_filters(&report, &args));
-
-        // Test with field value 2 - should be excluded since 2 >= 1
-        let report = create_test_evaluation_report(0, 2);
-        assert!(!matches_filters(&report, &args));
-    }
-
-    // Test baseline_fields_matched filtering with threshold 2
-    #[test]
-    fn baseline_threshold_2_keeps_field_0_and_1() {
-        let args = create_args_with_baseline_threshold(2);
-
-        // Test with field value 0 - should pass since 0 < 2
-        let report = create_test_evaluation_report(0, 0);
-        assert!(matches_filters(&report, &args));
-
-        // Test with field value 1 - should pass since 1 < 2
-        let report = create_test_evaluation_report(0, 1);
-        assert!(matches_filters(&report, &args));
-
-        // Test with field value 2 - should be excluded since 2 >= 2
-        let report = create_test_evaluation_report(0, 2);
-        assert!(!matches_filters(&report, &args));
-
-        // Test with field value 3 - should be excluded since 3 >= 2
-        let report = create_test_evaluation_report(0, 3);
-        assert!(!matches_filters(&report, &args));
-    }
-
-    // Test interaction between multiple filters
-    #[test]
-    fn both_filters_must_pass_for_entry_to_be_included() {
-        let args = create_args_with_both_thresholds(2, 2);
-
-        // Both fields pass their thresholds (0 < 2, 1 < 2)
-        let report = create_test_evaluation_report(0, 1);
-        assert!(matches_filters(&report, &args));
-
-        // Both fields pass their thresholds (1 < 2, 0 < 2)
-        let report = create_test_evaluation_report(1, 0);
-        assert!(matches_filters(&report, &args));
-
-        // Both fields are at boundary (1 < 2, 1 < 2)
-        let report = create_test_evaluation_report(1, 1);
-        assert!(matches_filters(&report, &args));
-
-        // policyai field fails threshold (2 >= 2), baseline field passes (1 < 2)
-        let report = create_test_evaluation_report(2, 1);
-        assert!(!matches_filters(&report, &args));
-
-        // policyai field passes (1 < 2), baseline field fails threshold (2 >= 2)
-        let report = create_test_evaluation_report(1, 2);
-        assert!(!matches_filters(&report, &args));
-
-        // Both fields fail their thresholds (2 >= 2, 3 >= 2)
-        let report = create_test_evaluation_report(2, 3);
-        assert!(!matches_filters(&report, &args));
-    }
-
-    // Test with no filters - should always pass
-    #[test]
-    fn no_filters_always_pass() {
         let args = Args::default();
-
-        // Test various field values - all should pass
-        let report = create_test_evaluation_report(0, 0);
-        assert!(matches_filters(&report, &args));
-
-        let report = create_test_evaluation_report(5, 10);
-        assert!(matches_filters(&report, &args));
-
-        let report = create_test_evaluation_report(100, 200);
-        assert!(matches_filters(&report, &args));
+        assert!(is_regression(&report, &args));
     }
 
-    // Test asymmetric thresholds
     #[test]
-    fn asymmetric_thresholds_work_independently() {
-        let args = create_args_with_both_thresholds(1, 3);
+    fn baseline_fail_policyai_pass_not_regression() {
+        let expected = serde_json::json!({"field1": "value1"});
+        let policyai_output = serde_json::json!({"field1": "value1"});
+        let baseline_output = serde_json::json!({"field1": "wrong_value"});
 
-        // policyai=0 passes (0 < 1), baseline=2 passes (2 < 3)
-        let report = create_test_evaluation_report(0, 2);
-        assert!(matches_filters(&report, &args));
+        let report = create_test_report(Some(expected), policyai_output, Some(baseline_output));
 
-        // policyai=1 fails (1 >= 1), baseline=0 passes (0 < 3)
-        let report = create_test_evaluation_report(1, 0);
-        assert!(!matches_filters(&report, &args));
-
-        // policyai=0 passes (0 < 1), baseline=3 fails (3 >= 3)
-        let report = create_test_evaluation_report(0, 3);
-        assert!(!matches_filters(&report, &args));
+        let args = Args::default();
+        assert!(!is_regression(&report, &args));
     }
 
-    // Test boundary conditions with large values
     #[test]
-    fn large_threshold_values() {
-        let args = create_args_with_both_thresholds(1000, 500);
+    fn both_pass_not_regression() {
+        let expected = serde_json::json!({"field1": "value1"});
+        let policyai_output = serde_json::json!({"field1": "value1"});
+        let baseline_output = serde_json::json!({"field1": "value1"});
 
-        // Values below thresholds should pass
-        let report = create_test_evaluation_report(999, 499);
-        assert!(matches_filters(&report, &args));
+        let report = create_test_report(Some(expected), policyai_output, Some(baseline_output));
 
-        // Values equal to thresholds should be excluded
-        let report = create_test_evaluation_report(1000, 500);
-        assert!(!matches_filters(&report, &args));
-
-        // Values above thresholds should be excluded
-        let report = create_test_evaluation_report(1001, 501);
-        assert!(!matches_filters(&report, &args));
+        let args = Args::default();
+        assert!(!is_regression(&report, &args));
     }
 
-    // Test interaction with other filter types to ensure they don't interfere
     #[test]
-    fn field_filters_independent_of_other_filters() {
-        let mut args = create_args_with_policyai_threshold(2);
-        args.metric = Some("unknown_metric".to_string()); // This should make metric filter fail
+    fn both_fail_not_regression_by_default() {
+        let expected = serde_json::json!({"field1": "value1"});
+        let policyai_output = serde_json::json!({"field1": "wrong1"});
+        let baseline_output = serde_json::json!({"field1": "wrong2"});
 
-        // Even though metric filter fails, if policyai_fields_matched passes, overall should fail
-        let report = create_test_evaluation_report(1, 0);
-        assert!(!matches_filters(&report, &args));
+        let report = create_test_report(Some(expected), policyai_output, Some(baseline_output));
 
-        // Reset to no other filters
-        args.metric = None;
+        let args = Args::default();
+        assert!(!is_regression(&report, &args));
+    }
 
-        // Now should pass since only field filter applies
-        assert!(matches_filters(&report, &args));
+    #[test]
+    fn both_fail_is_regression_with_flag() {
+        let expected = serde_json::json!({"field1": "value1"});
+        let policyai_output = serde_json::json!({"field1": "wrong1"});
+        let baseline_output = serde_json::json!({"field1": "wrong2"});
+
+        let report = create_test_report(Some(expected), policyai_output, Some(baseline_output));
+
+        let args = Args {
+            include_baseline_failures: true,
+            ..Default::default()
+        };
+        assert!(is_regression(&report, &args));
+    }
+
+    #[test]
+    fn no_expected_not_regression() {
+        let policyai_output = serde_json::json!({"field1": "value1"});
+        let baseline_output = serde_json::json!({"field1": "value1"});
+
+        let report = create_test_report(None, policyai_output, Some(baseline_output));
+
+        let args = Args::default();
+        assert!(!is_regression(&report, &args));
+    }
+
+    #[test]
+    fn no_baseline_not_regression() {
+        let expected = serde_json::json!({"field1": "value1"});
+        let policyai_output = serde_json::json!({"field1": "wrong_value"});
+
+        let report = create_test_report(Some(expected), policyai_output, None);
+
+        let args = Args::default();
+        assert!(!is_regression(&report, &args));
+    }
+
+    #[test]
+    fn complex_json_exact_match() {
+        let expected = serde_json::json!({
+            "user": {
+                "name": "John",
+                "age": 30,
+                "tags": ["important", "urgent"]
+            }
+        });
+
+        // Baseline matches exactly
+        let baseline_output = expected.clone();
+        // PolicyAI has different value
+        let policyai_output = serde_json::json!({
+            "user": {
+                "name": "John",
+                "age": 25, // different age
+                "tags": ["important", "urgent"]
+            }
+        });
+
+        let report = create_test_report(Some(expected), policyai_output, Some(baseline_output));
+
+        let args = Args::default();
+        assert!(is_regression(&report, &args));
+    }
+
+    #[test]
+    fn empty_objects_match() {
+        let expected = serde_json::json!({});
+        let policyai_output = serde_json::json!({});
+        let baseline_output = serde_json::json!({});
+
+        let report = create_test_report(Some(expected), policyai_output, Some(baseline_output));
+
+        let args = Args::default();
+        // Both pass, so not a regression
+        assert!(!is_regression(&report, &args));
+    }
+
+    #[test]
+    fn floating_point_exact_match() {
+        let expected = serde_json::json!({"score": 0.123456});
+        let policyai_output = serde_json::json!({"score": 0.123456});
+        let baseline_output = serde_json::json!({"score": 0.123456});
+
+        let report = create_test_report(Some(expected), policyai_output, Some(baseline_output));
+
+        let args = Args::default();
+        // Both pass exactly, so not a regression
+        assert!(!is_regression(&report, &args));
+    }
+
+    #[test]
+    fn floating_point_slight_difference_is_regression() {
+        let expected = serde_json::json!({"score": 100.0});
+        let policyai_output = serde_json::json!({"score": 100.2}); // 0.2% difference > 0.1% tolerance
+        let baseline_output = serde_json::json!({"score": 100.0});
+
+        let report = create_test_report(Some(expected), policyai_output, Some(baseline_output));
+
+        let args = Args::default();
+        // Baseline passes, PolicyAI fails due to difference > 0.1%
+        assert!(is_regression(&report, &args));
+    }
+
+    #[test]
+    fn floating_point_tolerance_prevents_regression() {
+        let expected = serde_json::json!({"score": 100.0});
+        let policyai_output = serde_json::json!({"score": 100.05}); // within 0.1% tolerance
+        let baseline_output = serde_json::json!({"score": 100.0});
+
+        let report = create_test_report(Some(expected), policyai_output, Some(baseline_output));
+
+        let args = Args::default();
+        // Both should pass with 0.1% tolerance, so not a regression
+        assert!(!is_regression(&report, &args));
+    }
+
+    #[test]
+    fn floating_point_tolerance_still_catches_large_differences() {
+        let expected = serde_json::json!({"score": 100.0});
+        let policyai_output = serde_json::json!({"score": 102.0}); // 2% difference > 0.1% tolerance
+        let baseline_output = serde_json::json!({"score": 100.0});
+
+        let report = create_test_report(Some(expected), policyai_output, Some(baseline_output));
+
+        let args = Args::default();
+        // Baseline passes, PolicyAI fails due to difference > 0.1%
+        assert!(is_regression(&report, &args));
+    }
+
+    #[test]
+    fn whitespace_differences_ignored_when_flag_set() {
+        let expected = serde_json::json!({"message": "Hello World"});
+        let policyai_output = serde_json::json!({"message": "Hello  World"}); // extra space
+        let baseline_output = serde_json::json!({"message": "Hello World"});
+
+        let report = create_test_report(Some(expected), policyai_output, Some(baseline_output));
+
+        let args = Args {
+            ignore_whitespace: true,
+            ..Default::default()
+        };
+        // Both should pass with whitespace normalization, so not a regression
+        assert!(!is_regression(&report, &args));
+    }
+
+    #[test]
+    fn whitespace_differences_matter_by_default() {
+        let expected = serde_json::json!({"message": "Hello World"});
+        let policyai_output = serde_json::json!({"message": "Hello  World"}); // extra space
+        let baseline_output = serde_json::json!({"message": "Hello World"});
+
+        let report = create_test_report(Some(expected), policyai_output, Some(baseline_output));
+
+        let args = Args::default();
+        // Baseline passes, PolicyAI fails due to whitespace difference
+        assert!(is_regression(&report, &args));
+    }
+
+    #[test]
+    fn array_order_ignored_when_flag_set() {
+        let expected = serde_json::json!({"tags": ["urgent", "important"]});
+        let policyai_output = serde_json::json!({"tags": ["important", "urgent"]}); // different order
+        let baseline_output = serde_json::json!({"tags": ["urgent", "important"]});
+
+        let report = create_test_report(Some(expected), policyai_output, Some(baseline_output));
+
+        let args = Args {
+            ignore_array_order: true,
+            ..Default::default()
+        };
+        // Both should pass with order-independent comparison, so not a regression
+        assert!(!is_regression(&report, &args));
+    }
+
+    #[test]
+    fn array_order_matters_by_default() {
+        let expected = serde_json::json!({"tags": ["urgent", "important"]});
+        let policyai_output = serde_json::json!({"tags": ["important", "urgent"]}); // different order
+        let baseline_output = serde_json::json!({"tags": ["urgent", "important"]});
+
+        let report = create_test_report(Some(expected), policyai_output, Some(baseline_output));
+
+        let args = Args::default();
+        // Baseline passes, PolicyAI fails due to order difference
+        assert!(is_regression(&report, &args));
+    }
+
+    #[test]
+    fn complex_nested_matching_with_all_options() {
+        let expected = serde_json::json!({
+            "user": {
+                "name": "John Doe",
+                "score": 95.0,
+                "tags": ["premium", "verified"]
+            }
+        });
+
+        let policyai_output = serde_json::json!({
+            "user": {
+                "name": "John  Doe", // extra whitespace
+                "score": 95.05,      // within 0.1% tolerance (95 * 0.001 = 0.095)
+                "tags": ["verified", "premium"] // different order
+            }
+        });
+
+        let baseline_output = expected.clone();
+
+        let report = create_test_report(Some(expected), policyai_output, Some(baseline_output));
+
+        let args = Args {
+            ignore_whitespace: true,
+            ignore_array_order: true,
+            ..Default::default()
+        };
+        // Both should pass with all matching options enabled
+        assert!(!is_regression(&report, &args));
+    }
+
+    #[test]
+    fn array_with_different_elements_still_fails() {
+        let expected = serde_json::json!({"tags": ["urgent", "important"]});
+        let policyai_output = serde_json::json!({"tags": ["urgent", "spam"]}); // different element
+        let baseline_output = serde_json::json!({"tags": ["urgent", "important"]});
+
+        let report = create_test_report(Some(expected), policyai_output, Some(baseline_output));
+
+        let args = Args {
+            ignore_array_order: true,
+            ..Default::default()
+        };
+        // Even with order-independent comparison, different elements should fail
+        assert!(is_regression(&report, &args));
+    }
+
+    #[test]
+    fn mixed_type_comparison_fails() {
+        let expected = serde_json::json!({"value": 42});
+        let policyai_output = serde_json::json!({"value": "42"}); // string instead of number
+        let baseline_output = serde_json::json!({"value": 42});
+
+        let report = create_test_report(Some(expected), policyai_output, Some(baseline_output));
+
+        let args = Args::default();
+        // Type mismatch should always fail regardless of matching options
+        assert!(is_regression(&report, &args));
     }
 }

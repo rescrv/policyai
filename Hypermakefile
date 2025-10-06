@@ -1,21 +1,19 @@
 TEXTS := data/ai-tweets.jsonl
-SEMANTIC_INJECTIONS := 100
-POLICIES_PER_TEXT := 5
-NEGATIVES_PER_TEXT := 5
+SEMANTIC_INJECTIONS := 1000
+POLICIES_PER_TEXT := 10
+NEGATIVES_PER_TEXT := 10
 DATA_TYPE := ( bool number string enum-field array )
 CONFLICT_RATE := 0
-TEST_CASES := 10
+TEST_CASES := 3
 MATCHING := ( 0 1 2 3 4 5 )
 POLICIES := 5
 
 K := 3
 N := 3
 
-.DELETE_ON_ERROR:
-
 .PHONY: all
 
-all: @data/report.jsonl
+all: @data/report-$(DATA_TYPE)-$(MATCHING)-$(POLICIES).jsonl @data/regressions-$(DATA_TYPE)-$(MATCHING)-$(POLICIES).jsonl
 
 data/semantic-injections.jsonl: $(TEXTS)
 	cargo run --example generate-semantic-injections -- --samples $(SEMANTIC_INJECTIONS) --policies $(POLICIES_PER_TEXT) --success $(K) --total $(N) $< > $@
@@ -23,11 +21,14 @@ data/semantic-injections.jsonl: $(TEXTS)
 data/decidables.jsonl: data/semantic-injections.jsonl
 	cargo run --example generate-decidables -- --policies $(NEGATIVES_PER_TEXT) --success $(K) --total $(N) $< > $@
 
-data/actions.jsonl: data/policy
+data/actions-$(DATA_TYPE).jsonl: data/policy
 	cargo run --example generate-actions -- --$(DATA_TYPE) < $< > $@
 
-data/test-data.jsonl: data/actions.jsonl data/decidables.jsonl
-	cargo run --example generate-test-data -- --actions data/actions.jsonl --decidables data/decidables.jsonl --conflict-rate $(CONFLICT_RATE) --samples $(TEST_CASES) --policies "$(POLICIES)" --matching "$(MATCHING)" --policy data/policy > $@
+data/test-data-$(DATA_TYPE)-$(MATCHING)-$(POLICIES).jsonl: data/actions-$(DATA_TYPE).jsonl data/decidables.jsonl
+	cargo run --example generate-test-data -- --actions data/actions-$(DATA_TYPE).jsonl --decidables data/decidables.jsonl --conflict-rate $(CONFLICT_RATE) --samples $(TEST_CASES) --policies "$(POLICIES)" --matching "$(MATCHING)" --policy data/policy > $@
 
-data/report.jsonl: data/test-data.jsonl
+data/report-$(DATA_TYPE)-$(MATCHING)-$(POLICIES).jsonl: data/test-data-$(DATA_TYPE)-$(MATCHING)-$(POLICIES).jsonl
 	cargo run --bin policyai-evaluate-policies -- $< > $@
+
+data/regressions-$(DATA_TYPE)-$(MATCHING)-$(POLICIES).jsonl: data/report-$(DATA_TYPE)-$(MATCHING)-$(POLICIES).jsonl
+	cargo run --bin policyai-extract-regressions -- $< > $@

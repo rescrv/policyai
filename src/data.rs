@@ -9,7 +9,7 @@ use claudius::{
     MessageParamContent, MessageRole, Model, StopReason, SystemPrompt, TextBlock, ThinkingConfig,
 };
 
-use crate::{Policy, Usage};
+use crate::{Policy, Report, Usage};
 
 /// A semantic injection with multiple candidate injections and their rationales.
 ///
@@ -447,6 +447,8 @@ pub struct EvaluationReport {
     pub input: TestDataPoint,
     /// Performance and accuracy metrics from the evaluation.
     pub metrics: Metrics,
+    /// The report produced by PolicyAI.
+    pub report: Report,
     /// The structured output produced by PolicyAI.
     pub output: serde_json::Value,
     /// The structured output produced by the baseline system, if available.
