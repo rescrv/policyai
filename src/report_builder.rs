@@ -289,6 +289,7 @@ impl ReportBuilder {
             self.string_enum_masks,
             self.masks_by_index,
         );
+        report.ir = Some(ir.clone());
         for m in report.bool_masks.clone().into_iter() {
             m.apply_to(&ir, &mut report);
         }

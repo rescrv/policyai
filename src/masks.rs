@@ -455,8 +455,12 @@ impl StringArrayMask {
         if let Some(reported) = ir.get(&self.mask) {
             match extract_strings(reported, 128) {
                 Some(strings) => {
-                    for s in strings {
-                        report.report_string_array(self.policy_index, &self.name, s);
+                    if strings.is_empty() {
+                        report.init_empty_string_array(self.policy_index, &self.name);
+                    } else {
+                        for s in strings {
+                            report.report_string_array(self.policy_index, &self.name, s);
+                        }
                     }
                 }
                 None => {
