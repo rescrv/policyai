@@ -4,7 +4,7 @@ POLICIES_PER_TEXT := 10
 NEGATIVES_PER_TEXT := 10
 DATA_TYPE := ( bool number string enum-field array )
 CONFLICT_RATE := 0
-TEST_CASES := 3
+TEST_CASES := 10
 MATCHING := ( 0 1 2 3 4 5 )
 POLICIES := 5
 

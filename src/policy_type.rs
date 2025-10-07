@@ -29,6 +29,34 @@ impl PolicyType {
         parser::parse(input.trim())
     }
 
+    /// Get the default value for this policy type.
+    ///
+    /// Returns a JSON object where each field name maps to its default value.
+    /// Fields without defaults will have null values (for String, Number, StringEnum)
+    /// or their type-specific defaults (bool fields always have a default, arrays default to []).
+    pub fn default_value(&self) -> serde_json::Value {
+        let mut defaults = serde_json::Map::new();
+        for field in self.fields.iter() {
+            let v = field.default_value();
+            match &v {
+                serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {
+                    defaults.insert(field.name().to_string(), v);
+                }
+                serde_json::Value::String(s) if !s.is_empty() => {
+                    defaults.insert(field.name().to_string(), v);
+                }
+                serde_json::Value::Array(a) if !a.is_empty() => {
+                    defaults.insert(field.name().to_string(), v);
+                }
+                serde_json::Value::Object(o) if !o.is_empty() => {
+                    defaults.insert(field.name().to_string(), v);
+                }
+                _ => {}
+            }
+        }
+        serde_json::Value::Object(defaults)
+    }
+
     /// Create a new Policy by applying a semantic injection to this PolicyType.
     ///
     /// The semantic injection is a natural language description that gets converted

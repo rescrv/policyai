@@ -48,7 +48,6 @@ pub mod analysis;
 mod errors;
 mod field;
 mod manager;
-mod masking;
 mod masks;
 mod on_conflict;
 mod parser;
@@ -61,7 +60,6 @@ mod usage;
 pub use errors::{ApplyError, Conflict, PolicyError};
 pub use field::Field;
 pub use manager::Manager;
-pub use masking::MaskGenerator;
 pub use masks::{BoolMask, NumberMask, StringArrayMask, StringEnumMask, StringMask};
 pub use on_conflict::OnConflict;
 pub use parser::ParseError;
@@ -105,13 +103,15 @@ impl PartialOrd for t64 {
 
 impl From<t64> for serde_json::Value {
     fn from(x: t64) -> Self {
-        x.0.into()
+        serde_json::Number::from_f64(x.0)
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null)
     }
 }
 
 //////////////////////////////////////////// Number Helpers ///////////////////////////////////////
 
-fn number_is_equal(lhs: &serde_json::Number, rhs: &serde_json::Number) -> bool {
+pub(crate) fn number_is_equal(lhs: &serde_json::Number, rhs: &serde_json::Number) -> bool {
     if lhs.is_f64() && rhs.is_f64() {
         lhs.as_f64() == rhs.as_f64()
     } else if lhs.is_u64() && rhs.is_u64() {
@@ -127,7 +127,7 @@ fn number_is_equal(lhs: &serde_json::Number, rhs: &serde_json::Number) -> bool {
     }
 }
 
-fn number_less_than(lhs: &serde_json::Number, rhs: &serde_json::Number) -> bool {
+pub(crate) fn number_less_than(lhs: &serde_json::Number, rhs: &serde_json::Number) -> bool {
     if lhs.is_f64() && rhs.is_f64() {
         lhs.as_f64() < rhs.as_f64()
     } else if lhs.is_u64() && rhs.is_u64() {
@@ -184,6 +184,23 @@ mod tests {
         let value = t64(3.25);
         let json_value: serde_json::Value = value.into();
         assert_eq!(json_value, serde_json::json!(3.25));
+    }
+
+    #[test]
+    fn t64_whole_number_serialization() {
+        let value = t64(42.0);
+        let json_value: serde_json::Value = value.into();
+        let serialized = serde_json::to_string(&json_value).unwrap();
+        let deserialized: serde_json::Value = serde_json::from_str(&serialized).unwrap();
+        let as_t64: t64 = serde_json::from_value(deserialized).unwrap();
+        assert_eq!(value, as_t64);
+    }
+
+    #[test]
+    fn t64_integer_deserialization() {
+        let json_str = "42";
+        let value: t64 = serde_json::from_str(json_str).unwrap();
+        assert_eq!(value, t64(42.0));
     }
 
     #[test]
@@ -403,7 +420,7 @@ This is an email about AI.
             .expect("manager should produce a JSON value");
         println!("{report}");
         assert_eq!(
-            serde_json::json! {{"priority": "low", "unread": true}},
+            serde_json::json! {{"category": "other", "priority": "low", "unread": true}},
             report.value()
         );
     }

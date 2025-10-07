@@ -1,8 +1,9 @@
 use claudius::{push_or_merge_message, JsonSchema, MessageParam, MessageRole};
+use uuid::Uuid;
 
 use crate::{
-    ApplyError, BoolMask, Field, MaskGenerator, NumberMask, Policy, PolicyError, Report,
-    StringArrayMask, StringEnumMask, StringMask,
+    ApplyError, BoolMask, Field, NumberMask, Policy, PolicyError, Report, StringArrayMask,
+    StringEnumMask, StringMask,
 };
 
 /// Builder for constructing Reports from policy definitions.
@@ -14,7 +15,6 @@ use crate::{
 #[derive(Clone)]
 pub struct ReportBuilder {
     mask_index: usize,
-    mask_gen: MaskGenerator,
     bool_masks: Vec<BoolMask>,
     number_masks: Vec<NumberMask>,
     string_masks: Vec<StringMask>,
@@ -81,6 +81,7 @@ impl ReportBuilder {
         let mut new_required = Vec::new();
         let mut new_properties = serde_json::Map::new();
         let mut new_masks = Vec::new();
+        self.default_return = policy.r#type.default_value();
         for field in policy.r#type.fields.iter() {
             let Some(value) = policy.action.get(field.name()) else {
                 continue;
@@ -94,7 +95,7 @@ impl ReportBuilder {
                     let serde_json::Value::Bool(v) = value else {
                         return Err(PolicyError::expected_bool(name.clone(), value));
                     };
-                    let mask = self.mask_gen.generate();
+                    let mask = Uuid::new_v4().to_string();
                     new_masks.push(mask.clone());
                     new_bool_masks.push(BoolMask::new(
                         self.policy_index,
@@ -104,7 +105,6 @@ impl ReportBuilder {
                         *v,
                         *on_conflict,
                     ));
-                    self.default_return[&mask] = (!*v).into();
                     content = content.replace(&format!("{name:?}"), &format!("{mask:?}"));
                     new_required.push(mask.clone());
                     new_properties.insert(mask, bool::json_schema());
@@ -119,7 +119,7 @@ impl ReportBuilder {
                         serde_json::Value::Null => None,
                         _ => return Err(PolicyError::expected_number(name.clone(), value)),
                     };
-                    let mask = self.mask_gen.generate();
+                    let mask = Uuid::new_v4().to_string();
                     new_masks.push(mask.clone());
                     new_number_masks.push(NumberMask::new(
                         self.policy_index,
@@ -129,10 +129,6 @@ impl ReportBuilder {
                         number_value.clone(),
                         *on_conflict,
                     ));
-                    self.default_return[&mask] = match &number_value {
-                        Some(v) => serde_json::Value::Number(v.clone()),
-                        None => serde_json::Value::Null,
-                    };
                     content = content.replace(&format!("{name:?}"), &format!("{mask:?}"));
                     if default.is_some() {
                         new_required.push(mask.clone());
@@ -149,7 +145,7 @@ impl ReportBuilder {
                         serde_json::Value::Null => None,
                         _ => return Err(PolicyError::expected_string(name.clone(), value)),
                     };
-                    let mask = self.mask_gen.generate();
+                    let mask = Uuid::new_v4().to_string();
                     new_masks.push(mask.clone());
                     new_string_masks.push(StringMask::new(
                         self.policy_index,
@@ -159,10 +155,6 @@ impl ReportBuilder {
                         string_value.clone(),
                         *on_conflict,
                     ));
-                    self.default_return[&mask] = match &string_value {
-                        Some(v) => serde_json::Value::String(v.clone()),
-                        None => serde_json::Value::Null,
-                    };
                     content = content.replace(&format!("{name:?}"), &format!("{mask:?}"));
                     if default.is_some() {
                         new_required.push(mask.clone());
@@ -181,7 +173,7 @@ impl ReportBuilder {
                             return Err(PolicyError::expected_string(name.clone(), v));
                         }
                     }
-                    let mask = self.mask_gen.generate();
+                    let mask = Uuid::new_v4().to_string();
                     new_masks.push(mask.clone());
                     new_string_array_masks.push(StringArrayMask::new(
                         self.policy_index,
@@ -189,7 +181,6 @@ impl ReportBuilder {
                         mask.clone(),
                         strings,
                     ));
-                    self.default_return[&mask] = serde_json::Value::Array(vec![]);
                     content = content.replace(&format!("{name:?}"), &format!("{mask:?}"));
                     new_properties.insert(mask, Vec::<String>::json_schema());
                 }
@@ -208,7 +199,7 @@ impl ReportBuilder {
                             Some(found_value.clone())
                         }
                     };
-                    let mask = self.mask_gen.generate();
+                    let mask = Uuid::new_v4().to_string();
                     new_masks.push(mask.clone());
                     new_string_enum_masks.push(StringEnumMask::new(
                         self.policy_index,
@@ -218,7 +209,6 @@ impl ReportBuilder {
                         default.clone(),
                         *on_conflict,
                     ));
-                    self.default_return[&mask] = false.into();
                     content = content.replace(&format!("{name:?}"), &format!("{mask:?}"));
                     if let Some(v) = &enum_value {
                         content = content.replace(&format!("{v:?}"), "true");
@@ -290,6 +280,7 @@ impl ReportBuilder {
             self.masks_by_index,
         );
         report.ir = Some(ir.clone());
+        report.default = Some(self.default_return);
         for m in report.bool_masks.clone().into_iter() {
             m.apply_to(&ir, &mut report);
         }
@@ -369,7 +360,6 @@ impl Default for ReportBuilder {
     fn default() -> ReportBuilder {
         ReportBuilder {
             mask_index: 1,
-            mask_gen: MaskGenerator::default(),
             bool_masks: vec![],
             number_masks: vec![],
             string_masks: vec![],

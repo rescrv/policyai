@@ -29,8 +29,9 @@ pub struct Report {
     pub rules_matched: Vec<usize>,
     /// The intermediate representation JSON received from the LLM
     pub ir: Option<serde_json::Value>,
+    /// Default values for all fields in the report
+    pub default: Option<serde_json::Value>,
 
-    default: Option<serde_json::Value>,
     value: Option<serde_json::Value>,
     errors: Vec<PolicyError>,
     conflicts: Vec<Conflict>,
@@ -645,7 +646,15 @@ impl Report {
             .or_insert_with(|| serde_json::Value::Array(vec![]));
     }
 
-    fn report_policy_index(&mut self, policy_index: usize) {
+    /// Record that a policy was matched.
+    ///
+    /// This is called internally when a mask is applied and matches the input data,
+    /// tracking which policies contributed to the report.
+    ///
+    /// # Arguments
+    ///
+    /// * `policy_index` - The index of the policy that was matched
+    pub fn report_policy_index(&mut self, policy_index: usize) {
         self.rules_matched.push(policy_index);
     }
 
