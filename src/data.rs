@@ -427,6 +427,7 @@ pub struct Metrics {
 ///
 /// ```
 /// use policyai::data::{EvaluationReport, TestDataPoint, Metrics};
+/// use policyai::Report;
 /// use serde_json::json;
 ///
 /// let report = EvaluationReport {
@@ -437,6 +438,7 @@ pub struct Metrics {
 ///         conflicts: None,
 ///     },
 ///     metrics: Metrics::default(),
+///     report: Report::default(),
 ///     output: json!({"processed": true}),
 ///     baseline: Some(json!({"processed": false})),
 /// };
