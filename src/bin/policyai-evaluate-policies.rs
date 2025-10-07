@@ -22,11 +22,23 @@ pub async fn naive_apply(
         user_id: Some("baseline".into()),
     });
     req.system = Some(SystemPrompt::from_blocks(vec![TextBlock {
-        text: include_str!("../../prompts/manager.md").to_string(),
+        text: include_str!("../../prompts/manager_naive.md").to_string(),
         cache_control: None,
         citations: None,
     }]));
     let mut properties = serde_json::json! {{}};
+    if !policies.is_empty() {
+        push_or_merge_message(
+            &mut req.messages,
+            MessageParam::new_with_string(
+                format!(
+                    "<default_value>{}</default_value>",
+                    serde_json::to_string(&policies[0].r#type.default_value()).unwrap()
+                ),
+                MessageRole::User,
+            ),
+        );
+    }
     for policy in policies.iter() {
         let content = policy.prompt.clone();
         for field in policy.r#type.fields.iter() {
@@ -169,6 +181,26 @@ fn clean_baseline(baseline: &serde_json::Value) -> serde_json::Value {
     }
 }
 
+fn build_expected_with_defaults(
+    policies: &[Policy],
+    expected: Option<&serde_json::Value>,
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut result = serde_json::Map::new();
+    for policy in policies.iter() {
+        if let Some(defaults) = policy.r#type.default_value().as_object() {
+            for (k, v) in defaults {
+                result.entry(k.clone()).or_insert(v.clone());
+            }
+        }
+    }
+    if let Some(serde_json::Value::Object(expected)) = expected {
+        for (k, v) in expected {
+            result.insert(k.clone(), v.clone());
+        }
+    }
+    result
+}
+
 fn calculate_field_metrics(
     expected: &serde_json::Map<String, serde_json::Value>,
     actual: &serde_json::Value,
@@ -230,13 +262,7 @@ async fn main() {
             for policy in point.policies.iter() {
                 manager.add(policy.clone());
             }
-            let expected = match &point.expected {
-                Some(serde_json::Value::Object(obj)) => obj.clone(),
-                _ => {
-                    eprintln!("error parsing expected as object on line {line}");
-                    continue;
-                }
-            };
+            let expected = build_expected_with_defaults(&point.policies, point.expected.as_ref());
             let mut metrics = Metrics::default();
 
             // Run baseline
@@ -818,5 +844,182 @@ mod tests {
         assert!(debug_str.contains("Metrics"));
         assert!(debug_str.contains("policyai_fields_matched"));
         assert!(debug_str.contains("policyai_apply_duration_ms"));
+    }
+
+    #[test]
+    fn build_expected_with_defaults_no_expected() {
+        use policyai::{Field, PolicyType};
+
+        let policy_type = PolicyType {
+            name: "TestPolicy".to_string(),
+            fields: vec![
+                Field::Bool {
+                    name: "enabled".to_string(),
+                    default: true,
+                    on_conflict: policyai::OnConflict::Default,
+                },
+                Field::String {
+                    name: "message".to_string(),
+                    default: Some("hello".to_string()),
+                    on_conflict: policyai::OnConflict::Agreement,
+                },
+            ],
+        };
+
+        let policies = vec![Policy {
+            r#type: policy_type,
+            prompt: "test".to_string(),
+            action: serde_json::json!({}),
+        }];
+
+        let result = build_expected_with_defaults(&policies, None);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result.get("enabled"), Some(&serde_json::json!(true)));
+        assert_eq!(result.get("message"), Some(&serde_json::json!("hello")));
+    }
+
+    #[test]
+    fn build_expected_with_defaults_merges_expected() {
+        use policyai::{Field, PolicyType};
+
+        let policy_type = PolicyType {
+            name: "TestPolicy".to_string(),
+            fields: vec![
+                Field::Bool {
+                    name: "enabled".to_string(),
+                    default: true,
+                    on_conflict: policyai::OnConflict::Default,
+                },
+                Field::String {
+                    name: "message".to_string(),
+                    default: Some("hello".to_string()),
+                    on_conflict: policyai::OnConflict::Agreement,
+                },
+                Field::Number {
+                    name: "count".to_string(),
+                    default: Some(policyai::t64(0.0)),
+                    on_conflict: policyai::OnConflict::LargestValue,
+                },
+            ],
+        };
+
+        let policies = vec![Policy {
+            r#type: policy_type,
+            prompt: "test".to_string(),
+            action: serde_json::json!({}),
+        }];
+
+        let expected = serde_json::json!({
+            "message": "goodbye",
+            "count": 42
+        });
+
+        let result = build_expected_with_defaults(&policies, Some(&expected));
+        assert_eq!(result.len(), 3);
+        assert_eq!(result.get("enabled"), Some(&serde_json::json!(true)));
+        assert_eq!(result.get("message"), Some(&serde_json::json!("goodbye")));
+        assert_eq!(result.get("count"), Some(&serde_json::json!(42)));
+    }
+
+    #[test]
+    fn build_expected_with_defaults_handles_null_defaults() {
+        use policyai::{Field, PolicyType};
+
+        let policy_type = PolicyType {
+            name: "TestPolicy".to_string(),
+            fields: vec![
+                Field::String {
+                    name: "optional".to_string(),
+                    default: None,
+                    on_conflict: policyai::OnConflict::Agreement,
+                },
+                Field::Bool {
+                    name: "required".to_string(),
+                    default: false,
+                    on_conflict: policyai::OnConflict::Default,
+                },
+            ],
+        };
+
+        let policies = vec![Policy {
+            r#type: policy_type,
+            prompt: "test".to_string(),
+            action: serde_json::json!({}),
+        }];
+
+        let result = build_expected_with_defaults(&policies, None);
+        assert_eq!(result.len(), 1);
+        assert!(!result.contains_key("optional"));
+        assert_eq!(result.get("required"), Some(&serde_json::json!(false)));
+    }
+
+    #[test]
+    fn build_expected_with_defaults_string_array() {
+        use policyai::{Field, PolicyType};
+
+        let policy_type = PolicyType {
+            name: "TestPolicy".to_string(),
+            fields: vec![Field::StringArray {
+                name: "tags".to_string(),
+            }],
+        };
+
+        let policies = vec![Policy {
+            r#type: policy_type,
+            prompt: "test".to_string(),
+            action: serde_json::json!({}),
+        }];
+
+        let result = build_expected_with_defaults(&policies, None);
+        assert_eq!(result.len(), 0);
+        assert_eq!(result.get("tags"), None);
+    }
+
+    #[test]
+    fn build_expected_with_defaults_multiple_policies() {
+        use policyai::{Field, PolicyType};
+
+        let policy_type1 = PolicyType {
+            name: "Policy1".to_string(),
+            fields: vec![Field::Bool {
+                name: "field1".to_string(),
+                default: true,
+                on_conflict: policyai::OnConflict::Default,
+            }],
+        };
+
+        let policy_type2 = PolicyType {
+            name: "Policy2".to_string(),
+            fields: vec![
+                Field::Bool {
+                    name: "field1".to_string(),
+                    default: false,
+                    on_conflict: policyai::OnConflict::Default,
+                },
+                Field::String {
+                    name: "field2".to_string(),
+                    default: Some("test".to_string()),
+                    on_conflict: policyai::OnConflict::Agreement,
+                },
+            ],
+        };
+
+        let policies = vec![
+            Policy {
+                r#type: policy_type1,
+                prompt: "test1".to_string(),
+                action: serde_json::json!({}),
+            },
+            Policy {
+                r#type: policy_type2,
+                prompt: "test2".to_string(),
+                action: serde_json::json!({}),
+            },
+        ];
+
+        let result = build_expected_with_defaults(&policies, None);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result.get("field1"), Some(&serde_json::json!(true)));
+        assert_eq!(result.get("field2"), Some(&serde_json::json!("test")));
     }
 }

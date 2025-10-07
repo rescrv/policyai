@@ -201,6 +201,11 @@ fn generate_normal_test_case(
         };
         policies.push(policy);
     }
+    if let Some(map) = policy_type.default_value().as_object() {
+        for (k, v) in map.iter() {
+            expected[k.clone()] = v.clone();
+        }
+    }
     policies.shuffle(rng);
     println!(
         "{}",
@@ -224,6 +229,14 @@ fn generate_conflict_test_case(
 ) {
     let mut policies = vec![];
     let mut conflicts = vec![];
+    let mut expected = serde_json::json! {{}};
+    for field in policy_type.fields.iter() {
+        let name = field.name();
+        let default = field.default_value();
+        if !default.is_null() {
+            expected[name] = default;
+        }
+    }
 
     // Decide how many fields to create conflicts for (at least 1, up to all)
     let num_conflict_fields = rng.random_range(1..=agreement_fields.len());
@@ -298,7 +311,7 @@ fn generate_conflict_test_case(
         serde_json::to_string(&policyai::data::TestDataPoint {
             text: injection.text.clone(),
             policies,
-            expected: None,
+            expected: Some(expected),
             conflicts: Some(conflicts),
         })
         .unwrap()

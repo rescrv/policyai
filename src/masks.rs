@@ -1,4 +1,4 @@
-use crate::{t64, OnConflict, Report};
+use crate::{number_is_equal, t64, OnConflict, Report};
 
 ///////////////////////////////////////////// BoolMask /////////////////////////////////////////////
 
@@ -196,7 +196,7 @@ impl NumberMask {
         match ir.get(&self.mask) {
             Some(serde_json::Value::Number(value)) => {
                 if let Some(expected_value) = &self.value {
-                    if value == expected_value {
+                    if number_is_equal(value, expected_value) {
                         report.report_number(
                             self.policy_index,
                             &self.name,
@@ -204,6 +204,7 @@ impl NumberMask {
                             self.on_conflict,
                         );
                     } else {
+                        report.report_policy_index(self.policy_index);
                         report.report_number_conflict(
                             &self.name,
                             value.clone(),
@@ -340,6 +341,7 @@ impl StringMask {
                             self.on_conflict,
                         );
                     } else {
+                        report.report_policy_index(self.policy_index);
                         report.report_string_conflict(
                             &self.name,
                             value.clone(),
@@ -573,6 +575,7 @@ impl StringEnumMask {
                             self.on_conflict,
                         );
                     } else {
+                        report.report_policy_index(self.policy_index);
                         report.report_string_enum_conflict(
                             &self.name,
                             value.to_string(),

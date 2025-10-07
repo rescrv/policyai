@@ -165,19 +165,16 @@ impl Manager {
                 .cloned()
                 .collect::<Vec<_>>();
             let mut content =
-                "Your output is inconsistent and I reject it with a request for you to try again."
+                "<instruction>The reported rule numbers do not match the fields that were output.  Re-evaluate your output to resolve the following inconsistencies.</instruction>"
                     .to_string();
             if !empirical_but_not_reported.is_empty() {
-                content += "\n\nYou output the JSON corresponding to the following rules but did not report them in \"__rule_numbers__\":\n";
                 for rule_number in empirical_but_not_reported.into_iter() {
                     if rule_number > 0 && rule_number <= report.masks_by_index.len() {
                         for mask in report.masks_by_index[rule_number - 1].iter() {
-                            content += &format!(
-                            "- Rule {rule_number}: Either set \"{mask}\" to its default or append {rule_number} to \"__rule_numbers__\".\n"
-                        );
+                            content += &format!("<inconsistency>{rule_number} was not present in rule numbers, but \"{mask}\" was set.<resolution>Unset \"{mask}\" if the context doesn't match or add {rule_number} to \"__rule_numbers__\" if the rule matches.</resolution></inconsistency>");
                         }
                     } else {
-                        content += &format!("- Rule number {rule_number} doesn't exist.\n");
+                        content += &format!("<inconsistency>Rule number {rule_number} present in __rule_numbers__, but it doesn't exist in the reported rules.</inconsistency>");
                     }
                 }
             }
@@ -186,12 +183,10 @@ impl Manager {
                 for rule_number in reported_but_not_empirical.into_iter() {
                     if rule_number > 0 && rule_number <= report.masks_by_index.len() {
                         for mask in report.masks_by_index[rule_number - 1].iter() {
-                            content += &format!(
-                            "- Rule {rule_number}: Either set \"{mask}\" to a non-default value or remove {rule_number} from \"__rule_numbers__\".\n"
-                        );
+                            content += &format!("<inconsistency>{rule_number} was present in rule numbers, but \"{mask}\" was not set.<resolution>Set \"{mask}\" if the context matches or remove {rule_number} from \"__rule_numbers__\" if the rule does not match.</resolution></inconsistency>");
                         }
                     } else {
-                        content += &format!("- Rule number {rule_number} doesn't exist.\n");
+                        content += &format!("<inconsistency>Rule number {rule_number} present in __rule_numbers__, but it doesn't exist in the reported rules.</inconsistency>");
                     }
                 }
             }
@@ -301,10 +296,6 @@ impl Manager {
             ),
         );
         req.tool_choice = Some(ToolChoice::tool("output_json"));
-        eprintln!(
-            "{}",
-            serde_json::to_string_pretty(&report.schema()).unwrap()
-        );
         req.tools = Some(vec![claudius::ToolUnionParam::CustomTool(
             claudius::ToolParam {
                 name: "output_json".to_string(),
@@ -496,7 +487,7 @@ mod tests {
                     match type_val.as_str() {
                         Some("boolean") => has_boolean = true,
                         Some("string") => has_string = true,
-                        Some("number") => has_number = true,
+                        Some("number") | Some("integer") => has_number = true,
                         _ => {}
                     }
                 }
