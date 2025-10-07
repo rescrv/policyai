@@ -318,7 +318,7 @@ Add PolicyAI to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-policyai = "0.2"
+policyai = "0.3"
 ```
 
 Basic usage:
