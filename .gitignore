@@ -1,8 +1,10 @@
 /Cargo.lock
 /target
-/data/actions.jsonl
+/data/actions-*.jsonl
 /data/ai-tweets.jsonl
 /data/decidables.jsonl
 /data/semantic-injections.jsonl
-/data/test-data.jsonl
+/data/test-data-*.jsonl
+/data/report-*.jsonl
+/data/regressions-*.jsonl
 /Makefile

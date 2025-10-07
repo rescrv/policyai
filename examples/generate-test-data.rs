@@ -145,11 +145,11 @@ fn generate_normal_test_case(
     let mut policies = vec![];
     let mut expected = serde_json::json! {{}};
     while policies.len() < options.policies {
-        let (prompt, action) = if policies.len() < options.matching {
+        let (prompt, inject, action) = if policies.len() < options.matching {
             let Some(prompt) = injection.positives.choose(rng) else {
                 continue;
             };
-            let mut prompt = prompt.clone();
+            let prompt = prompt.clone();
             fn is_compatible_action(output: &serde_json::Value, action: &InjectableAction) -> bool {
                 let serde_json::Value::Object(obj) = &action.action else {
                     return false;
@@ -177,30 +177,26 @@ fn generate_normal_test_case(
                 }
             }
             let action = pick_compatible_action(rng, &expected, actions);
-            prompt += "  ";
-            prompt += &action.inject;
             let serde_json::Value::Object(obj) = &action.action else {
                 continue;
             };
             for (k, v) in obj {
                 expected[k] = v.clone();
             }
-            (prompt, &action.action)
+            (prompt, &action.inject, &action.action)
         } else {
             let Some(prompt) = injection.negatives.choose(rng) else {
                 continue;
             };
-            let mut prompt = prompt.clone();
+            let prompt = prompt.clone();
             let Some(action) = actions.choose(rng) else {
                 continue;
             };
-            prompt += "  ";
-            prompt += &action.inject;
-            (prompt, &action.action)
+            (prompt, &action.inject, &action.action)
         };
         let policy = policyai::Policy {
             r#type: policy_type.clone(),
-            prompt,
+            prompt: format!("<match>{prompt}</match><action>{inject}</action>"),
             action: action.clone(),
         };
         policies.push(policy);
@@ -269,13 +265,11 @@ fn generate_conflict_test_case(
 
             // Use positive prompt since we want these to match
             let prompt = injection.positives.choose(rng).unwrap();
-            let mut prompt = prompt.clone();
-            prompt += "  ";
-            prompt += &action.inject;
-
+            let prompt = prompt.clone();
+            let inject = &action.inject;
             let policy = policyai::Policy {
                 r#type: policy_type.clone(),
-                prompt,
+                prompt: format!("<match>{prompt}</match><action>{inject}</action>"),
                 action: action.action.clone(),
             };
             policies.push(policy);

@@ -206,7 +206,7 @@ impl std::error::Error for PolicyError {
 ///     val2: false,
 /// };
 /// ```
-#[derive(Debug, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub enum Conflict {
     /// Conflict between two boolean values for the same field.
     BoolConflict {
