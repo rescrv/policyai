@@ -469,6 +469,415 @@ impl FieldMatchAccuracyMatrix {
     }
 }
 
+/// Aggregates token usage statistics across multiple reports with percentile analysis.
+///
+/// This structure collects detailed token usage information from PolicyAI and baseline
+/// evaluations, enabling statistical analysis including min, max, average, median (p50),
+/// and 99th percentile (p99) calculations.
+///
+/// # Examples
+///
+/// ```rust
+/// use policyai::analysis::TokenUsageAnalysis;
+/// use policyai::data::Metrics;
+/// use policyai::Usage;
+///
+/// let mut analysis = TokenUsageAnalysis::new();
+///
+/// let metrics = Metrics {
+///     policyai_usage: Some(Usage::new()),
+///     baseline_usage: Some(Usage::new()),
+///     // ... other fields
+/// #   policyai_fields_matched: 5,
+/// #   baseline_fields_matched: 5,
+/// #   policyai_fields_with_wrong_value: 0,
+/// #   baseline_fields_with_wrong_value: 0,
+/// #   policyai_fields_missing: 0,
+/// #   baseline_fields_missing: 0,
+/// #   policyai_extra_fields: 0,
+/// #   baseline_extra_fields: 0,
+/// #   policyai_error: None,
+/// #   baseline_error: None,
+/// #   policyai_apply_duration_ms: 100,
+/// #   baseline_apply_duration_ms: 150,
+/// };
+///
+/// analysis.add_report(&metrics);
+/// ```
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct TokenUsageAnalysis {
+    /// Total number of reports processed.
+    pub total_reports: usize,
+    /// Individual PolicyAI input token counts for percentile calculation.
+    pub policyai_input_tokens: Vec<usize>,
+    /// Individual PolicyAI output token counts for percentile calculation.
+    pub policyai_output_tokens: Vec<usize>,
+    /// Individual PolicyAI cache creation token counts for percentile calculation.
+    pub policyai_cache_creation_tokens: Vec<usize>,
+    /// Individual PolicyAI cache read token counts for percentile calculation.
+    pub policyai_cache_read_tokens: Vec<usize>,
+    /// Individual baseline input token counts for percentile calculation.
+    pub baseline_input_tokens: Vec<usize>,
+    /// Individual baseline output token counts for percentile calculation.
+    pub baseline_output_tokens: Vec<usize>,
+    /// Individual baseline cache creation token counts for percentile calculation.
+    pub baseline_cache_creation_tokens: Vec<usize>,
+    /// Individual baseline cache read token counts for percentile calculation.
+    pub baseline_cache_read_tokens: Vec<usize>,
+    /// Individual PolicyAI wall clock times in milliseconds.
+    pub policyai_wall_clock_ms: Vec<u64>,
+    /// Individual baseline wall clock times in milliseconds.
+    pub baseline_wall_clock_ms: Vec<u64>,
+    /// Individual PolicyAI iteration counts.
+    pub policyai_iterations: Vec<usize>,
+    /// Individual baseline iteration counts.
+    pub baseline_iterations: Vec<usize>,
+}
+
+impl TokenUsageAnalysis {
+    /// Create a new token usage analysis with empty statistics.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add metrics from a single report to the analysis.
+    ///
+    /// Extracts token usage information from both PolicyAI and baseline evaluations
+    /// and adds them to the tracking vectors for statistical analysis.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use policyai::analysis::TokenUsageAnalysis;
+    /// use policyai::data::Metrics;
+    ///
+    /// let mut analysis = TokenUsageAnalysis::new();
+    /// let metrics = Metrics::default();
+    /// analysis.add_report(&metrics);
+    /// assert_eq!(analysis.total_reports, 1);
+    /// ```
+    pub fn add_report(&mut self, metrics: &crate::data::Metrics) {
+        self.total_reports += 1;
+
+        if let Some(ref usage) = metrics.policyai_usage {
+            if let Some(ref claudius_usage) = usage.claudius_usage {
+                self.policyai_input_tokens
+                    .push(claudius_usage.input_tokens as usize);
+                self.policyai_output_tokens
+                    .push(claudius_usage.output_tokens as usize);
+                self.policyai_cache_creation_tokens
+                    .push(claudius_usage.cache_creation_input_tokens.unwrap_or(0) as usize);
+                self.policyai_cache_read_tokens
+                    .push(claudius_usage.cache_read_input_tokens.unwrap_or(0) as usize);
+            }
+            self.policyai_wall_clock_ms
+                .push(usage.wall_clock_time.as_millis() as u64);
+            self.policyai_iterations.push(usage.iterations);
+        }
+
+        if let Some(ref usage) = metrics.baseline_usage {
+            if let Some(ref claudius_usage) = usage.claudius_usage {
+                self.baseline_input_tokens
+                    .push(claudius_usage.input_tokens as usize);
+                self.baseline_output_tokens
+                    .push(claudius_usage.output_tokens as usize);
+                self.baseline_cache_creation_tokens
+                    .push(claudius_usage.cache_creation_input_tokens.unwrap_or(0) as usize);
+                self.baseline_cache_read_tokens
+                    .push(claudius_usage.cache_read_input_tokens.unwrap_or(0) as usize);
+            }
+            self.baseline_wall_clock_ms
+                .push(usage.wall_clock_time.as_millis() as u64);
+            self.baseline_iterations.push(usage.iterations);
+        }
+    }
+
+    /// Calculate the total number of tokens from a vector.
+    fn total(values: &[usize]) -> usize {
+        values.iter().sum()
+    }
+
+    /// Calculate the average of token counts.
+    fn avg(values: &[usize]) -> f64 {
+        if values.is_empty() {
+            0.0
+        } else {
+            Self::total(values) as f64 / values.len() as f64
+        }
+    }
+
+    /// Calculate the minimum value from a vector.
+    fn min(values: &[usize]) -> usize {
+        values.iter().copied().min().unwrap_or(0)
+    }
+
+    /// Calculate the maximum value from a vector.
+    fn max(values: &[usize]) -> usize {
+        values.iter().copied().max().unwrap_or(0)
+    }
+
+    /// Calculate the p50 (median) value from a vector.
+    fn p50(values: &[usize]) -> usize {
+        Self::percentile(values, 50.0)
+    }
+
+    /// Calculate the p99 value from a vector.
+    fn p99(values: &[usize]) -> usize {
+        Self::percentile(values, 99.0)
+    }
+
+    /// Calculate a specific percentile from a vector of values.
+    fn percentile(values: &[usize], p: f64) -> usize {
+        if values.is_empty() {
+            return 0;
+        }
+        let mut sorted = values.to_vec();
+        sorted.sort_unstable();
+        let index = ((p / 100.0) * (sorted.len() - 1) as f64).round() as usize;
+        sorted[index]
+    }
+
+    /// Calculate the average of u64 values.
+    fn avg_u64(values: &[u64]) -> f64 {
+        if values.is_empty() {
+            0.0
+        } else {
+            values.iter().sum::<u64>() as f64 / values.len() as f64
+        }
+    }
+
+    /// Calculate the p50 (median) value from a u64 vector.
+    fn p50_u64(values: &[u64]) -> u64 {
+        Self::percentile_u64(values, 50.0)
+    }
+
+    /// Calculate the p99 value from a u64 vector.
+    fn p99_u64(values: &[u64]) -> u64 {
+        Self::percentile_u64(values, 99.0)
+    }
+
+    /// Calculate a specific percentile from a vector of u64 values.
+    fn percentile_u64(values: &[u64], p: f64) -> u64 {
+        if values.is_empty() {
+            return 0;
+        }
+        let mut sorted = values.to_vec();
+        sorted.sort_unstable();
+        let index = ((p / 100.0) * (sorted.len() - 1) as f64).round() as usize;
+        sorted[index]
+    }
+
+    /// Get PolicyAI total input tokens.
+    pub fn policyai_total_input_tokens(&self) -> usize {
+        Self::total(&self.policyai_input_tokens)
+    }
+
+    /// Get PolicyAI average input tokens.
+    pub fn policyai_avg_input_tokens(&self) -> f64 {
+        Self::avg(&self.policyai_input_tokens)
+    }
+
+    /// Get PolicyAI minimum input tokens.
+    pub fn policyai_min_input_tokens(&self) -> usize {
+        Self::min(&self.policyai_input_tokens)
+    }
+
+    /// Get PolicyAI maximum input tokens.
+    pub fn policyai_max_input_tokens(&self) -> usize {
+        Self::max(&self.policyai_input_tokens)
+    }
+
+    /// Get PolicyAI p50 input tokens.
+    pub fn policyai_p50_input_tokens(&self) -> usize {
+        Self::p50(&self.policyai_input_tokens)
+    }
+
+    /// Get PolicyAI p99 input tokens.
+    pub fn policyai_p99_input_tokens(&self) -> usize {
+        Self::p99(&self.policyai_input_tokens)
+    }
+
+    /// Get PolicyAI total output tokens.
+    pub fn policyai_total_output_tokens(&self) -> usize {
+        Self::total(&self.policyai_output_tokens)
+    }
+
+    /// Get PolicyAI average output tokens.
+    pub fn policyai_avg_output_tokens(&self) -> f64 {
+        Self::avg(&self.policyai_output_tokens)
+    }
+
+    /// Get PolicyAI minimum output tokens.
+    pub fn policyai_min_output_tokens(&self) -> usize {
+        Self::min(&self.policyai_output_tokens)
+    }
+
+    /// Get PolicyAI maximum output tokens.
+    pub fn policyai_max_output_tokens(&self) -> usize {
+        Self::max(&self.policyai_output_tokens)
+    }
+
+    /// Get PolicyAI p50 output tokens.
+    pub fn policyai_p50_output_tokens(&self) -> usize {
+        Self::p50(&self.policyai_output_tokens)
+    }
+
+    /// Get PolicyAI p99 output tokens.
+    pub fn policyai_p99_output_tokens(&self) -> usize {
+        Self::p99(&self.policyai_output_tokens)
+    }
+
+    /// Get PolicyAI total cache creation tokens.
+    pub fn policyai_total_cache_creation_tokens(&self) -> usize {
+        Self::total(&self.policyai_cache_creation_tokens)
+    }
+
+    /// Get PolicyAI average cache creation tokens.
+    pub fn policyai_avg_cache_creation_tokens(&self) -> f64 {
+        Self::avg(&self.policyai_cache_creation_tokens)
+    }
+
+    /// Get PolicyAI p99 cache creation tokens.
+    pub fn policyai_p99_cache_creation_tokens(&self) -> usize {
+        Self::p99(&self.policyai_cache_creation_tokens)
+    }
+
+    /// Get PolicyAI total cache read tokens.
+    pub fn policyai_total_cache_read_tokens(&self) -> usize {
+        Self::total(&self.policyai_cache_read_tokens)
+    }
+
+    /// Get PolicyAI average cache read tokens.
+    pub fn policyai_avg_cache_read_tokens(&self) -> f64 {
+        Self::avg(&self.policyai_cache_read_tokens)
+    }
+
+    /// Get PolicyAI p99 cache read tokens.
+    pub fn policyai_p99_cache_read_tokens(&self) -> usize {
+        Self::p99(&self.policyai_cache_read_tokens)
+    }
+
+    /// Get PolicyAI average wall clock time in milliseconds.
+    pub fn policyai_avg_wall_clock_ms(&self) -> f64 {
+        Self::avg_u64(&self.policyai_wall_clock_ms)
+    }
+
+    /// Get PolicyAI p50 wall clock time in milliseconds.
+    pub fn policyai_p50_wall_clock_ms(&self) -> u64 {
+        Self::p50_u64(&self.policyai_wall_clock_ms)
+    }
+
+    /// Get PolicyAI p99 wall clock time in milliseconds.
+    pub fn policyai_p99_wall_clock_ms(&self) -> u64 {
+        Self::p99_u64(&self.policyai_wall_clock_ms)
+    }
+
+    /// Get baseline total input tokens.
+    pub fn baseline_total_input_tokens(&self) -> usize {
+        Self::total(&self.baseline_input_tokens)
+    }
+
+    /// Get baseline average input tokens.
+    pub fn baseline_avg_input_tokens(&self) -> f64 {
+        Self::avg(&self.baseline_input_tokens)
+    }
+
+    /// Get baseline minimum input tokens.
+    pub fn baseline_min_input_tokens(&self) -> usize {
+        Self::min(&self.baseline_input_tokens)
+    }
+
+    /// Get baseline maximum input tokens.
+    pub fn baseline_max_input_tokens(&self) -> usize {
+        Self::max(&self.baseline_input_tokens)
+    }
+
+    /// Get baseline p50 input tokens.
+    pub fn baseline_p50_input_tokens(&self) -> usize {
+        Self::p50(&self.baseline_input_tokens)
+    }
+
+    /// Get baseline p99 input tokens.
+    pub fn baseline_p99_input_tokens(&self) -> usize {
+        Self::p99(&self.baseline_input_tokens)
+    }
+
+    /// Get baseline total output tokens.
+    pub fn baseline_total_output_tokens(&self) -> usize {
+        Self::total(&self.baseline_output_tokens)
+    }
+
+    /// Get baseline average output tokens.
+    pub fn baseline_avg_output_tokens(&self) -> f64 {
+        Self::avg(&self.baseline_output_tokens)
+    }
+
+    /// Get baseline minimum output tokens.
+    pub fn baseline_min_output_tokens(&self) -> usize {
+        Self::min(&self.baseline_output_tokens)
+    }
+
+    /// Get baseline maximum output tokens.
+    pub fn baseline_max_output_tokens(&self) -> usize {
+        Self::max(&self.baseline_output_tokens)
+    }
+
+    /// Get baseline p50 output tokens.
+    pub fn baseline_p50_output_tokens(&self) -> usize {
+        Self::p50(&self.baseline_output_tokens)
+    }
+
+    /// Get baseline p99 output tokens.
+    pub fn baseline_p99_output_tokens(&self) -> usize {
+        Self::p99(&self.baseline_output_tokens)
+    }
+
+    /// Get baseline total cache creation tokens.
+    pub fn baseline_total_cache_creation_tokens(&self) -> usize {
+        Self::total(&self.baseline_cache_creation_tokens)
+    }
+
+    /// Get baseline average cache creation tokens.
+    pub fn baseline_avg_cache_creation_tokens(&self) -> f64 {
+        Self::avg(&self.baseline_cache_creation_tokens)
+    }
+
+    /// Get baseline p99 cache creation tokens.
+    pub fn baseline_p99_cache_creation_tokens(&self) -> usize {
+        Self::p99(&self.baseline_cache_creation_tokens)
+    }
+
+    /// Get baseline total cache read tokens.
+    pub fn baseline_total_cache_read_tokens(&self) -> usize {
+        Self::total(&self.baseline_cache_read_tokens)
+    }
+
+    /// Get baseline average cache read tokens.
+    pub fn baseline_avg_cache_read_tokens(&self) -> f64 {
+        Self::avg(&self.baseline_cache_read_tokens)
+    }
+
+    /// Get baseline p99 cache read tokens.
+    pub fn baseline_p99_cache_read_tokens(&self) -> usize {
+        Self::p99(&self.baseline_cache_read_tokens)
+    }
+
+    /// Get baseline average wall clock time in milliseconds.
+    pub fn baseline_avg_wall_clock_ms(&self) -> f64 {
+        Self::avg_u64(&self.baseline_wall_clock_ms)
+    }
+
+    /// Get baseline p50 wall clock time in milliseconds.
+    pub fn baseline_p50_wall_clock_ms(&self) -> u64 {
+        Self::p50_u64(&self.baseline_wall_clock_ms)
+    }
+
+    /// Get baseline p99 wall clock time in milliseconds.
+    pub fn baseline_p99_wall_clock_ms(&self) -> u64 {
+        Self::p99_u64(&self.baseline_wall_clock_ms)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
