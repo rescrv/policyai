@@ -16,8 +16,6 @@ pub struct BoolMask {
     pub mask: String,
     /// Default value when the field is not present
     pub default: Option<bool>,
-    /// Expected boolean value that activates this policy rule
-    pub is_true: bool,
     /// Strategy for resolving conflicts when multiple policies set different values
     pub on_conflict: OnConflict,
 }
@@ -31,7 +29,6 @@ impl BoolMask {
     /// * `name` - The original field name from the policy definition
     /// * `mask` - The masked field name unlikely to be in LLM training data
     /// * `default` - The default boolean value when field is absent
-    /// * `is_true` - The boolean value that activates this policy rule
     /// * `on_conflict` - Strategy for resolving conflicts between policies
     ///
     /// # Example
@@ -52,7 +49,6 @@ impl BoolMask {
         name: String,
         mask: String,
         default: Option<bool>,
-        is_true: bool,
         on_conflict: OnConflict,
     ) -> Self {
         Self {
@@ -60,7 +56,6 @@ impl BoolMask {
             name,
             mask,
             default,
-            is_true,
             on_conflict,
         }
     }
@@ -87,11 +82,7 @@ impl BoolMask {
     pub fn apply_to(&self, ir: &serde_json::Value, report: &mut Report) {
         match ir.get(&self.mask) {
             Some(serde_json::Value::Bool(ret)) => {
-                if *ret == self.is_true {
-                    report.report_bool(self.policy_index, &self.name, true, self.on_conflict);
-                } else {
-                    report.report_bool(self.policy_index, &self.name, false, self.on_conflict);
-                }
+                report.report_bool(self.policy_index, &self.name, *ret, self.on_conflict);
             }
             Some(_) => {
                 report.report_type_check_failure(
