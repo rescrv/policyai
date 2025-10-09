@@ -640,8 +640,8 @@ impl Parser {
                 let default = if self.peek() == Some(&Token::Equals) {
                     self.advance();
                     match self.advance() {
-                        Some(Token::True) => true,
-                        Some(Token::False) => false,
+                        Some(Token::True) => Some(true),
+                        Some(Token::False) => Some(false),
                         _ => {
                             return Err(ParseError::Custom {
                                 message: "expected 'true' or 'false' after '='".to_string(),
@@ -650,7 +650,7 @@ impl Parser {
                         }
                     }
                 } else {
-                    false
+                    None
                 };
                 Ok(Field::Bool {
                     name,
@@ -822,7 +822,7 @@ mod tests {
         match &policy_type.fields[0] {
             Field::Bool { name, default, .. } => {
                 assert_eq!(name, "active");
-                assert!(*default);
+                assert_eq!(*default, Some(true));
             }
             _ => panic!("Expected bool field"),
         }

@@ -21,7 +21,7 @@ use crate::{t64, OnConflict};
 ///
 /// let field = Field::Bool {
 ///     name: "is_active".to_string(),
-///     default: true,
+///     default: Some(true),
 ///     on_conflict: OnConflict::Default,
 /// };
 /// ```
@@ -33,7 +33,7 @@ pub enum Field {
         /// The name of this field.
         name: String,
         /// The default boolean value when no policy sets this field.
-        default: bool,
+        default: Option<bool>,
         /// Strategy for resolving conflicts when multiple policies set this field.
         on_conflict: OnConflict,
     },
@@ -146,27 +146,21 @@ impl std::fmt::Display for Field {
                 default,
                 on_conflict,
             } => match on_conflict {
-                OnConflict::Default => {
-                    if *default {
-                        write!(f, "{name}: bool = true")?;
-                    } else {
-                        write!(f, "{name}: bool")?;
-                    }
-                }
-                OnConflict::Agreement => {
-                    if *default {
-                        write!(f, "{name}: bool @ agreement = true")?;
-                    } else {
-                        write!(f, "{name}: bool @ agreement")?;
-                    }
-                }
-                OnConflict::LargestValue => {
-                    if *default {
-                        write!(f, "{name}: bool @ sticky = true")?;
-                    } else {
-                        write!(f, "{name}: bool @ sticky")?;
-                    }
-                }
+                OnConflict::Default => match default {
+                    Some(true) => write!(f, "{name}: bool = true")?,
+                    Some(false) => write!(f, "{name}: bool = false")?,
+                    None => write!(f, "{name}: bool")?,
+                },
+                OnConflict::Agreement => match default {
+                    Some(true) => write!(f, "{name}: bool @ agreement = true")?,
+                    Some(false) => write!(f, "{name}: bool @ agreement = false")?,
+                    None => write!(f, "{name}: bool @ agreement")?,
+                },
+                OnConflict::LargestValue => match default {
+                    Some(true) => write!(f, "{name}: bool @ sticky = true")?,
+                    Some(false) => write!(f, "{name}: bool @ sticky = false")?,
+                    None => write!(f, "{name}: bool @ sticky")?,
+                },
             },
             Self::String {
                 name,
@@ -273,7 +267,7 @@ mod tests {
     fn field_name() {
         let bool_field = Field::Bool {
             name: "is_active".to_string(),
-            default: true,
+            default: Some(true),
             on_conflict: OnConflict::Default,
         };
         assert_eq!(bool_field.name(), "is_active");
@@ -310,7 +304,7 @@ mod tests {
     fn field_default_value() {
         let bool_field = Field::Bool {
             name: "is_active".to_string(),
-            default: true,
+            default: Some(true),
             on_conflict: OnConflict::Default,
         };
         assert_eq!(bool_field.default_value(), serde_json::json!(true));
@@ -354,31 +348,31 @@ mod tests {
     fn field_display_bool() {
         let field = Field::Bool {
             name: "is_active".to_string(),
-            default: true,
+            default: Some(true),
             on_conflict: OnConflict::Default,
         };
         assert_eq!(field.to_string(), "is_active: bool = true");
 
         let field = Field::Bool {
             name: "is_active".to_string(),
-            default: false,
+            default: Some(false),
             on_conflict: OnConflict::Default,
         };
-        assert_eq!(field.to_string(), "is_active: bool");
+        assert_eq!(field.to_string(), "is_active: bool = false");
 
         let field = Field::Bool {
             name: "is_active".to_string(),
-            default: true,
+            default: Some(true),
             on_conflict: OnConflict::Agreement,
         };
         assert_eq!(field.to_string(), "is_active: bool @ agreement = true");
 
         let field = Field::Bool {
             name: "is_active".to_string(),
-            default: false,
+            default: Some(false),
             on_conflict: OnConflict::LargestValue,
         };
-        assert_eq!(field.to_string(), "is_active: bool @ sticky");
+        assert_eq!(field.to_string(), "is_active: bool @ sticky = false");
     }
 
     #[test]
@@ -462,7 +456,7 @@ mod tests {
     fn field_serialization() {
         let field = Field::Bool {
             name: "is_active".to_string(),
-            default: true,
+            default: Some(true),
             on_conflict: OnConflict::Default,
         };
         let serialized = serde_json::to_string(&field).unwrap();

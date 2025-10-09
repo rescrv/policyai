@@ -56,7 +56,7 @@ let policy_type = PolicyType {
     fields: vec![
         Field::Bool {
             name: "unread".to_string(),
-            default: true,
+            default: Some(true),
             on_conflict: OnConflict::Default,
         },
         Field::StringEnum {
@@ -165,7 +165,7 @@ Use the field type's default behavior (usually last-writer-wins, but arrays appe
 ```rust
 Field::Bool {
     name: "unread".to_string(),
-    default: true,
+    default: Some(true),
     on_conflict: OnConflict::Default,
 }
 ```

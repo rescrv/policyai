@@ -24,7 +24,7 @@
 //!     fields: vec![
 //!         Field::Bool {
 //!             name: "unread".to_string(),
-//!             default: true,
+//!             default: Some(true),
 //!             on_conflict: OnConflict::Default,
 //!         },
 //!         Field::StringEnum {
@@ -238,7 +238,7 @@ mod tests {
             fields: vec![
                 Field::Bool {
                     name: "unread".to_string(),
-                    default: true,
+                    default: Some(true),
                     on_conflict: OnConflict::Default,
                 },
                 Field::StringEnum {
@@ -287,7 +287,7 @@ mod tests {
             fields: vec![
                 Field::Bool {
                     name: "unread".to_string(),
-                    default: true,
+                    default: Some(true),
                     on_conflict: OnConflict::Default,
                 },
                 Field::StringEnum {
@@ -360,7 +360,7 @@ mod tests {
             fields: vec![
                 Field::Bool {
                     name: "unread".to_string(),
-                    default: true,
+                    default: Some(true),
                     on_conflict: OnConflict::Default,
                 },
                 Field::StringEnum {

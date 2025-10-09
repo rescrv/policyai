@@ -320,7 +320,7 @@ mod tests {
             fields: vec![
                 Field::Bool {
                     name: "is_active".to_string(),
-                    default: false,
+                    default: Some(false),
                     on_conflict: crate::OnConflict::Default,
                 },
                 Field::String {
@@ -405,7 +405,7 @@ mod tests {
             name: "DifferentPolicy".to_string(),
             fields: vec![Field::Bool {
                 name: "enabled".to_string(),
-                default: true,
+                default: Some(true),
                 on_conflict: crate::OnConflict::Default,
             }],
         };

@@ -332,7 +332,7 @@ pub struct ConflictField {
 ///     fields: vec![
 ///         Field::Bool {
 ///             name: "urgent".to_string(),
-///             default: false,
+///             default: Some(false),
 ///             on_conflict: OnConflict::Default,
 ///         }
 ///     ],
@@ -567,7 +567,7 @@ mod tests {
             name: "TestPolicy".to_string(),
             fields: vec![Field::Bool {
                 name: "enabled".to_string(),
-                default: false,
+                default: Some(false),
                 on_conflict: crate::OnConflict::Default,
             }],
         };
