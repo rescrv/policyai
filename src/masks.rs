@@ -39,8 +39,7 @@ impl BoolMask {
     ///     1,
     ///     "urgent".to_string(),
     ///     "field_abc123".to_string(),
-    ///     None,
-    ///     true,
+    ///     Some(false),
     ///     OnConflict::Agreement
     /// );
     /// ```
@@ -74,7 +73,7 @@ impl BoolMask {
     ///
     /// ```
     /// # use policyai::{BoolMask, OnConflict, Report};
-    /// let mask = BoolMask::new(1, "urgent".to_string(), "field_abc".to_string(), None, true, OnConflict::Default);
+    /// let mask = BoolMask::new(1, "urgent".to_string(), "field_abc".to_string(), None, OnConflict::Default);
     /// let ir = serde_json::json!({"field_abc": true});
     /// let mut report = Report::new(vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
     /// mask.apply_to(&ir, &mut report);
