@@ -182,7 +182,7 @@ mod tests {
             fields: vec![
                 Field::Bool {
                     name: "active".to_string(),
-                    default: true,
+                    default: Some(true),
                     on_conflict: OnConflict::Default,
                 },
                 Field::String {
@@ -228,7 +228,7 @@ mod tests {
         match &policy_type.fields[0] {
             Field::Bool { name, default, .. } => {
                 assert_eq!(name, "active");
-                assert!(*default);
+                assert_eq!(*default, Some(true));
             }
             _ => panic!("Expected Bool field"),
         }
@@ -359,7 +359,7 @@ mod tests {
             fields: vec![
                 Field::Bool {
                     name: "flag".to_string(),
-                    default: false,
+                    default: Some(false),
                     on_conflict: OnConflict::Default,
                 },
                 Field::String {
@@ -383,7 +383,7 @@ mod tests {
             name: "TestPolicy".to_string(),
             fields: vec![Field::Bool {
                 name: "active".to_string(),
-                default: true,
+                default: Some(true),
                 on_conflict: OnConflict::Default,
             }],
         };
@@ -392,7 +392,7 @@ mod tests {
             name: "TestPolicy".to_string(),
             fields: vec![Field::Bool {
                 name: "active".to_string(),
-                default: true,
+                default: Some(true),
                 on_conflict: OnConflict::Default,
             }],
         };
@@ -401,7 +401,7 @@ mod tests {
             name: "DifferentPolicy".to_string(),
             fields: vec![Field::Bool {
                 name: "active".to_string(),
-                default: true,
+                default: Some(true),
                 on_conflict: OnConflict::Default,
             }],
         };
@@ -439,7 +439,7 @@ mod tests {
             name: "SerializeTest".to_string(),
             fields: vec![Field::Bool {
                 name: "enabled".to_string(),
-                default: true,
+                default: Some(true),
                 on_conflict: OnConflict::Default,
             }],
         };
@@ -458,7 +458,7 @@ mod tests {
             name: "RoundTripTest".to_string(),
             fields: vec![Field::Bool {
                 name: "active".to_string(),
-                default: true,
+                default: Some(true),
                 on_conflict: OnConflict::Default,
             }],
         };
@@ -476,7 +476,7 @@ mod tests {
             fields: vec![
                 Field::Bool {
                     name: "enabled".to_string(),
-                    default: false,
+                    default: Some(false),
                     on_conflict: OnConflict::Agreement,
                 },
                 Field::String {
@@ -514,7 +514,7 @@ mod tests {
             fields: vec![
                 Field::Bool {
                     name: "field1".to_string(),
-                    default: true,
+                    default: Some(true),
                     on_conflict: OnConflict::Default,
                 },
                 Field::String {

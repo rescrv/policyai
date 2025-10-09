@@ -727,7 +727,7 @@ mod tests {
             name: "TestPolicy".to_string(),
             fields: vec![Field::Bool {
                 name: "enabled".to_string(),
-                default: false,
+                default: Some(false),
                 on_conflict: policyai::OnConflict::Default,
             }],
         };
@@ -855,7 +855,7 @@ mod tests {
             fields: vec![
                 Field::Bool {
                     name: "enabled".to_string(),
-                    default: true,
+                    default: Some(true),
                     on_conflict: policyai::OnConflict::Default,
                 },
                 Field::String {
@@ -887,7 +887,7 @@ mod tests {
             fields: vec![
                 Field::Bool {
                     name: "enabled".to_string(),
-                    default: true,
+                    default: Some(true),
                     on_conflict: policyai::OnConflict::Default,
                 },
                 Field::String {
@@ -935,7 +935,7 @@ mod tests {
                 },
                 Field::Bool {
                     name: "required".to_string(),
-                    default: false,
+                    default: Some(false),
                     on_conflict: policyai::OnConflict::Default,
                 },
             ],
@@ -983,7 +983,7 @@ mod tests {
             name: "Policy1".to_string(),
             fields: vec![Field::Bool {
                 name: "field1".to_string(),
-                default: true,
+                default: Some(true),
                 on_conflict: policyai::OnConflict::Default,
             }],
         };
@@ -993,7 +993,7 @@ mod tests {
             fields: vec![
                 Field::Bool {
                     name: "field1".to_string(),
-                    default: false,
+                    default: Some(false),
                     on_conflict: policyai::OnConflict::Default,
                 },
                 Field::String {

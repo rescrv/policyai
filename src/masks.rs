@@ -15,7 +15,7 @@ pub struct BoolMask {
     /// Masked field name unlikely to be in LLM training data
     pub mask: String,
     /// Default value when the field is not present
-    pub default: bool,
+    pub default: Option<bool>,
     /// Expected boolean value that activates this policy rule
     pub is_true: bool,
     /// Strategy for resolving conflicts when multiple policies set different values
@@ -42,7 +42,7 @@ impl BoolMask {
     ///     1,
     ///     "urgent".to_string(),
     ///     "field_abc123".to_string(),
-    ///     false,
+    ///     None,
     ///     true,
     ///     OnConflict::Agreement
     /// );
@@ -51,7 +51,7 @@ impl BoolMask {
         policy_index: usize,
         name: String,
         mask: String,
-        default: bool,
+        default: Option<bool>,
         is_true: bool,
         on_conflict: OnConflict,
     ) -> Self {
@@ -79,7 +79,7 @@ impl BoolMask {
     ///
     /// ```
     /// # use policyai::{BoolMask, OnConflict, Report};
-    /// let mask = BoolMask::new(1, "urgent".to_string(), "field_abc".to_string(), false, true, OnConflict::Default);
+    /// let mask = BoolMask::new(1, "urgent".to_string(), "field_abc".to_string(), None, true, OnConflict::Default);
     /// let ir = serde_json::json!({"field_abc": true});
     /// let mut report = Report::new(vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
     /// mask.apply_to(&ir, &mut report);
@@ -88,9 +88,9 @@ impl BoolMask {
         match ir.get(&self.mask) {
             Some(serde_json::Value::Bool(ret)) => {
                 if *ret == self.is_true {
-                    report.report_bool(self.policy_index, &self.name, *ret, self.on_conflict);
+                    report.report_bool(self.policy_index, &self.name, true, self.on_conflict);
                 } else {
-                    report.report_bool_default(&self.name, self.default);
+                    report.report_bool(self.policy_index, &self.name, false, self.on_conflict);
                 }
             }
             Some(_) => {
@@ -101,7 +101,9 @@ impl BoolMask {
                 );
             }
             None => {
-                report.report_bool_default(&self.name, self.default);
+                if let Some(v) = self.default {
+                    report.report_bool_default(&self.name, v);
+                }
             }
         }
     }
