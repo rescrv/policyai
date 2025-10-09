@@ -1,4 +1,3 @@
-
 # Output JSON
 <summary>
 - Output JSON if and only if a rule matches.  Be discerning.

@@ -202,8 +202,10 @@ fn generate_normal_test_case(
         policies.push(policy);
     }
     if let Some(map) = policy_type.default_value().as_object() {
-        for (k, v) in map.iter() {
-            expected[k.clone()] = v.clone();
+        if let Some(as_obj) = expected.as_object_mut() {
+            for (k, v) in map.iter() {
+                as_obj.entry(k.clone()).or_insert_with(|| v.clone());
+            }
         }
     }
     policies.shuffle(rng);
