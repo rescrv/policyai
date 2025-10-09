@@ -31,4 +31,4 @@ data/report-$(DATA_TYPE)-$(MATCHING)-$(POLICIES).jsonl: data/test-data-$(DATA_TY
 	cargo run --bin policyai-evaluate-policies -- $< > $@
 
 data/regressions-$(DATA_TYPE)-$(MATCHING)-$(POLICIES).jsonl: data/report-$(DATA_TYPE)-$(MATCHING)-$(POLICIES).jsonl
-	cargo run --bin policyai-extract-regressions -- $< > $@
+	cargo run --bin policyai-extract-regressions -- --include-baseline-failures $< > $@
