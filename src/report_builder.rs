@@ -92,7 +92,7 @@ impl ReportBuilder {
                     default,
                     on_conflict,
                 } => {
-                    let serde_json::Value::Bool(v) = value else {
+                    let serde_json::Value::Bool(_) = value else {
                         return Err(PolicyError::expected_bool(name.clone(), value));
                     };
                     let mask = Uuid::new_v4().to_string();
@@ -102,7 +102,6 @@ impl ReportBuilder {
                         name.clone(),
                         mask.clone(),
                         *default,
-                        *v,
                         *on_conflict,
                     ));
                     content = content.replace(&format!("{name:?}"), &format!("{mask:?}"));
