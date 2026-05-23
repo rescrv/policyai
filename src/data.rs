@@ -5,9 +5,9 @@
 //! and structures for evaluation metrics and test data points.
 
 use claudius::{
-    Anthropic, CacheControlEphemeral, ContentBlock, Effort, KnownModel, MessageCreateParams,
-    MessageParam, MessageParamContent, MessageRole, Model, OutputConfig, StopReason, SystemPrompt,
-    TextBlock, ThinkingConfig,
+    Anthropic, CacheControlEphemeral, ContentBlock, Effort, MessageCreateParams, MessageParam,
+    MessageParamContent, MessageRole, Model, OutputConfig, StopReason, SystemPrompt, TextBlock,
+    ThinkingConfig,
 };
 
 use crate::{Policy, Report, Usage};
@@ -52,6 +52,7 @@ pub struct SemanticInjection {
 /// * `semantic_injection` - The policy's semantic injection rule
 /// * `k` - Minimum number of successes required
 /// * `n` - Maximum number of attempts to make
+/// * `model` - The model to use for policy applicability checks
 ///
 /// # Returns
 ///
@@ -66,7 +67,7 @@ pub struct SemanticInjection {
 ///
 /// ```no_run
 /// use claudius::Anthropic;
-/// use policyai::data::policy_applies;
+/// use policyai::{data::policy_applies, DEFAULT_MODEL};
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let client = Anthropic::new(None)?;
@@ -75,7 +76,8 @@ pub struct SemanticInjection {
 ///     "This is urgent!",
 ///     "If text indicates urgency, mark as high priority",
 ///     3,  // Need 3 successes
-///     5   // Out of 5 attempts
+///     5,  // Out of 5 attempts
+///     DEFAULT_MODEL
 /// ).await?;
 /// # Ok(())
 /// # }
@@ -86,8 +88,9 @@ pub async fn policy_applies(
     semantic_injection: &str,
     k: usize,
     n: usize,
+    model: Model,
 ) -> Result<bool, claudius::Error> {
-    Ok(apply_policy_fractional(client, text, semantic_injection, k, n).await? >= k)
+    Ok(apply_policy_fractional(client, text, semantic_injection, k, n, model).await? >= k)
 }
 
 /// Determine if a policy does NOT apply to given text with statistical confidence.
@@ -103,6 +106,7 @@ pub async fn policy_applies(
 /// * `semantic_injection` - The policy's semantic injection rule
 /// * `k` - Minimum number of successes that would indicate the policy applies
 /// * `n` - Maximum number of attempts to make
+/// * `model` - The model to use for policy applicability checks
 ///
 /// # Returns
 ///
@@ -117,7 +121,7 @@ pub async fn policy_applies(
 ///
 /// ```no_run
 /// use claudius::Anthropic;
-/// use policyai::data::policy_does_not_apply;
+/// use policyai::{data::policy_does_not_apply, DEFAULT_MODEL};
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let client = Anthropic::new(None)?;
@@ -126,7 +130,8 @@ pub async fn policy_applies(
 ///     "Regular email content",
 ///     "If text indicates urgency, mark as high priority",
 ///     3,  // Would need 3 successes to apply
-///     5   // Out of 5 attempts
+///     5,  // Out of 5 attempts
+///     DEFAULT_MODEL
 /// ).await?;
 /// # Ok(())
 /// # }
@@ -137,9 +142,10 @@ pub async fn policy_does_not_apply(
     semantic_injection: &str,
     k: usize,
     n: usize,
+    model: Model,
 ) -> Result<bool, claudius::Error> {
     Ok(
-        apply_policy_fractional(client, text, semantic_injection, k, n).await?
+        apply_policy_fractional(client, text, semantic_injection, k, n, model).await?
             <= n.saturating_sub(k),
     )
 }
@@ -150,6 +156,7 @@ async fn apply_policy_fractional(
     semantic_injection: &str,
     k: usize,
     n: usize,
+    model: Model,
 ) -> Result<usize, claudius::Error> {
     let mut success = 0;
     let mut total = 0;
@@ -173,7 +180,7 @@ Output just this one-word answer
         .to_string();
         let req = MessageCreateParams {
             max_tokens: 1030,
-            model: Model::Known(KnownModel::ClaudeOpus48),
+            model: model.clone(),
             cache_control: None,
             system: Some(SystemPrompt::from_blocks(vec![TextBlock {
                 text: system.to_string(),

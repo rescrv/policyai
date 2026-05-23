@@ -2,9 +2,7 @@ use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader};
 
 use arrrg::CommandLine;
-use claudius::{
-    Anthropic, CacheControlEphemeral, KnownModel, Model, SystemPrompt, TextBlock, ThinkingConfig,
-};
+use claudius::{Anthropic, CacheControlEphemeral, Model, SystemPrompt, TextBlock, ThinkingConfig};
 use rand::prelude::*;
 
 #[derive(Clone, Default, Debug, Eq, PartialEq, arrrg_derive::CommandLine)]
@@ -23,6 +21,8 @@ struct Options {
         "The number of total verifications to perform for each policy."
     )]
     total: usize,
+    #[arrrg(optional, "Anthropic model to use for generation and verification.")]
+    model: Option<String>,
 }
 
 #[tokio::main]
@@ -33,6 +33,11 @@ async fn main() -> Result<(), claudius::Error> {
         eprintln!("expected TEXTS");
         std::process::exit(13);
     }
+    let model = options
+        .model
+        .as_deref()
+        .map(|model| model.parse::<Model>().unwrap())
+        .unwrap_or(policyai::DEFAULT_MODEL);
     let texts_file = BufReader::new(OpenOptions::new().read(true).open(&free[0]).unwrap());
     let mut texts = vec![];
     for line in texts_file.lines() {
@@ -82,7 +87,7 @@ Text:
             let req = claudius::MessageCreateParams {
                 max_tokens: 2048,
                 messages: vec![prompt.into()],
-                model: Model::Known(KnownModel::ClaudeOpus48),
+                model: model.clone(),
                 cache_control: None,
                 metadata: None,
                 output_config: None,
@@ -119,6 +124,7 @@ Text:
                 &injection,
                 options.success,
                 options.total,
+                model.clone(),
             )
             .await?
             {

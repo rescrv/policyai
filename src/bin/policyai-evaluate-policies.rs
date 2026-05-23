@@ -3,12 +3,12 @@ use std::io::{BufRead, BufReader};
 use std::time::Instant;
 
 use claudius::{
-    push_or_merge_message, Anthropic, ContentBlock, JsonSchema, KnownModel, MessageCreateParams,
-    MessageParam, MessageRole, Metadata, Model, SystemPrompt, TextBlock, ToolChoice,
+    push_or_merge_message, Anthropic, ContentBlock, JsonSchema, MessageCreateParams, MessageParam,
+    MessageRole, Metadata, Model, SystemPrompt, TextBlock, ToolChoice,
 };
 
 use policyai::data::{EvaluationReport, Metrics, TestDataPoint};
-use policyai::{ApplyError, Field, Manager, Policy, Report, Usage};
+use policyai::{ApplyError, Field, Manager, Policy, Report, Usage, DEFAULT_MODEL};
 
 pub async fn naive_apply(
     client: &Anthropic,
@@ -243,8 +243,9 @@ fn calculate_field_metrics(
 
 #[tokio::main]
 async fn main() {
+    let (model, files) = parse_args();
     let client = Anthropic::new(None).unwrap();
-    for file in std::env::args().skip(1) {
+    for file in files {
         let file = OpenOptions::new()
             .read(true)
             .open(file)
@@ -274,7 +275,7 @@ async fn main() {
                 &point.policies,
                 &MessageCreateParams {
                     max_tokens: 4096,
-                    model: Model::Known(KnownModel::ClaudeOpus48),
+                    model: model.clone(),
                     ..Default::default()
                 },
                 &point.text,
@@ -309,7 +310,7 @@ async fn main() {
                     &client,
                     MessageCreateParams {
                         max_tokens: 4096,
-                        model: Model::Known(KnownModel::ClaudeOpus48),
+                        model: model.clone(),
                         ..Default::default()
                     },
                     &point.text,
@@ -348,6 +349,26 @@ async fn main() {
             println!("{}", serde_json::to_string(&report).unwrap());
         }
     }
+}
+
+fn parse_args() -> (Model, Vec<String>) {
+    let mut model = DEFAULT_MODEL;
+    let mut files = Vec::new();
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        if arg == "--model" {
+            let Some(value) = args.next() else {
+                eprintln!("--model requires a value");
+                std::process::exit(2);
+            };
+            model = value.parse::<Model>().unwrap();
+        } else if let Some(value) = arg.strip_prefix("--model=") {
+            model = value.parse::<Model>().unwrap();
+        } else {
+            files.push(arg);
+        }
+    }
+    (model, files)
 }
 
 #[cfg(test)]

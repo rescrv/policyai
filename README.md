@@ -80,21 +80,24 @@ A semantic injection is a natural language instruction that generates structured
 let policy1 = policy_type
     .with_semantic_injection(
         &client,
-        "If the email is about football, mark \"unread\" false with low \"priority\""
+        "If the email is about football, mark \"unread\" false with low \"priority\"",
+        DEFAULT_MODEL
     )
     .await?;
 
 let policy2 = policy_type
     .with_semantic_injection(
         &client,
-        "If the email is from mom@example.org, set high \"priority\" and add Family \"label\""
+        "If the email is from mom@example.org, set high \"priority\" and add Family \"label\"",
+        DEFAULT_MODEL
     )
     .await?;
 
 let policy3 = policy_type
     .with_semantic_injection(
         &client,
-        "If the email is about shopping, add Shopping \"label\""
+        "If the email is about shopping, add Shopping \"label\"",
+        DEFAULT_MODEL
     )
     .await?;
 ```
@@ -264,7 +267,8 @@ When adding policies to your vector database, store both the semantic injection 
 let policy = policy_type
     .with_semantic_injection(
         &client,
-        "If email from VIP, set high priority"
+        "If email from VIP, set high priority",
+        DEFAULT_MODEL
     )
     .await?;
 
@@ -324,7 +328,7 @@ policyai = "0.3"
 Basic usage:
 
 ```rust
-use policyai::{PolicyType, Field, OnConflict, Manager};
+use policyai::{PolicyType, Field, OnConflict, Manager, DEFAULT_MODEL};
 use claudius::Anthropic;
 
 #[tokio::main]
@@ -340,7 +344,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create a policy from natural language
     let policy = policy_type
-        .with_semantic_injection(&client, "Set high priority for urgent messages")
+        .with_semantic_injection(&client, "Set high priority for urgent messages", DEFAULT_MODEL)
         .await?;
 
     // Apply it
