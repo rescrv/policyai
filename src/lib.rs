@@ -59,7 +59,7 @@ mod usage;
 
 pub use errors::{ApplyError, Conflict, PolicyError};
 pub use field::Field;
-pub use manager::Manager;
+pub use manager::{InferenceConfig, Manager};
 pub use masks::{BoolMask, NumberMask, StringArrayMask, StringEnumMask, StringMask};
 pub use on_conflict::OnConflict;
 pub use parser::ParseError;

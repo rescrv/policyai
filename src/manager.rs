@@ -2,10 +2,33 @@ use std::time::Instant;
 
 use claudius::{
     push_or_merge_message, Anthropic, ContentBlock, MessageCreateParams, MessageParam,
-    MessageParamContent, MessageRole, SystemPrompt, TextBlock, ToolChoice, ToolResultBlock,
+    MessageParamContent, MessageRole, OutputFormat, SystemPrompt, TextBlock, ToolChoice,
+    ToolResultBlock,
 };
 
 use crate::{ApplyError, Policy, Report, ReportBuilder, Usage};
+
+/// Selects how PolicyAI requests structured output from the model.
+///
+/// This can be configured on [`Manager`] before inference, or passed directly
+/// to [`Manager::apply_with_inference_config`] or
+/// [`Manager::request_for_with_inference_config`] for a single request.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum InferenceConfig {
+    /// Use the `output_json` tool without strict structured-output validation.
+    #[default]
+    ToolUse,
+    /// Use the `output_json` tool with `strict: true`.
+    StrictToolUse,
+    /// Use [`OutputFormat::JsonSchema`] instead of tool use.
+    OutputFormatJsonSchema,
+}
+
+impl InferenceConfig {
+    fn uses_tools(self) -> bool {
+        matches!(self, Self::ToolUse | Self::StrictToolUse)
+    }
+}
 
 /// Manages a collection of policies and applies them to unstructured data.
 ///
@@ -49,9 +72,29 @@ use crate::{ApplyError, Policy, Report, ReportBuilder, Usage};
 #[derive(Debug, Default)]
 pub struct Manager {
     policies: Vec<Policy>,
+    inference_config: InferenceConfig,
 }
 
 impl Manager {
+    /// Configure how this manager requests structured model output.
+    ///
+    /// This builder-style method is useful when selecting the inference config
+    /// before the final call to [`Manager::apply`].
+    pub fn with_inference_config(mut self, inference_config: InferenceConfig) -> Self {
+        self.inference_config = inference_config;
+        self
+    }
+
+    /// Set how this manager requests structured model output.
+    pub fn set_inference_config(&mut self, inference_config: InferenceConfig) {
+        self.inference_config = inference_config;
+    }
+
+    /// Return the currently configured inference mode.
+    pub fn inference_config(&self) -> InferenceConfig {
+        self.inference_config
+    }
+
     /// Add a policy to the manager.
     ///
     /// # Panics
@@ -97,10 +140,34 @@ impl Manager {
         client: &Anthropic,
         template: MessageCreateParams,
         unstructured_data: &str,
+        usage: Option<&mut Usage>,
+    ) -> Result<Report, ApplyError> {
+        self.apply_with_inference_config(
+            client,
+            template,
+            unstructured_data,
+            usage,
+            self.inference_config,
+        )
+        .await
+    }
+
+    /// Apply all managed policies using a specific inference configuration.
+    ///
+    /// This is the per-call override for selecting between non-strict tool use,
+    /// strict tool use, and JSON-schema [`OutputFormat`] structured output.
+    pub async fn apply_with_inference_config(
+        &mut self,
+        client: &Anthropic,
+        template: MessageCreateParams,
+        unstructured_data: &str,
         mut usage: Option<&mut Usage>,
+        inference_config: InferenceConfig,
     ) -> Result<Report, ApplyError> {
         let start_time = Instant::now();
-        let (report, mut req) = self.request_for(template, unstructured_data).await?;
+        let (report, mut req) = self
+            .request_for_with_inference_config(template, unstructured_data, inference_config)
+            .await?;
         let max_attempts = 5;
         let mut last_error = String::new();
 
@@ -117,22 +184,8 @@ impl Manager {
                 usage.add_claudius_usage(resp.usage);
                 usage.increment_iterations();
             }
-            if resp.content.len() != 1 {
-                return Err(ApplyError::invalid_response(
-                    format!(
-                        "Expected exactly 1 content block, got {}",
-                        resp.content.len()
-                    ),
-                    "Check that the LLM is configured correctly and the tool definition is valid",
-                ));
-            }
-            let ContentBlock::ToolUse(t) = &resp.content[0] else {
-                return Err(ApplyError::invalid_response(
-                    "Expected ToolUse content block",
-                    "The LLM should be using the output_json tool to provide structured output",
-                ));
-            };
-            let ir = t.input.clone();
+            let extracted = extract_ir(&resp.content, inference_config)?;
+            let ir = extracted.ir;
             let Some(reportedly_matched) = ir.get("__rule_numbers__").cloned() else {
                 continue;
             };
@@ -198,22 +251,35 @@ impl Manager {
                     content: MessageParamContent::Array(resp.content.clone()),
                 },
             );
-            push_or_merge_message(
-                &mut req.messages,
-                MessageParam {
-                    role: MessageRole::User,
-                    content: MessageParamContent::Array(vec![ContentBlock::ToolResult(
-                        ToolResultBlock {
-                            tool_use_id: t.id.clone(),
-                            cache_control: None,
-                            is_error: Some(true),
-                            content: Some(
-                                format!("<error-message>{content}</error-message>").into(),
-                            ),
+            match extracted.feedback {
+                FeedbackTarget::Tool { tool_use_id } => {
+                    push_or_merge_message(
+                        &mut req.messages,
+                        MessageParam {
+                            role: MessageRole::User,
+                            content: MessageParamContent::Array(vec![ContentBlock::ToolResult(
+                                ToolResultBlock {
+                                    tool_use_id,
+                                    cache_control: None,
+                                    is_error: Some(true),
+                                    content: Some(
+                                        format!("<error-message>{content}</error-message>").into(),
+                                    ),
+                                },
+                            )]),
                         },
-                    )]),
-                },
-            );
+                    );
+                }
+                FeedbackTarget::Text => {
+                    push_or_merge_message(
+                        &mut req.messages,
+                        MessageParam::new_with_string(
+                            format!("<error-message>{content}</error-message>"),
+                            MessageRole::User,
+                        ),
+                    );
+                }
+            }
         }
         // Set final wall clock time even on error
         if let Some(usage) = &mut usage {
@@ -260,6 +326,21 @@ impl Manager {
         template: MessageCreateParams,
         text: &str,
     ) -> Result<(ReportBuilder, MessageCreateParams), ApplyError> {
+        self.request_for_with_inference_config(template, text, self.inference_config)
+            .await
+    }
+
+    /// Prepare a request using a specific inference configuration.
+    ///
+    /// This is the per-call request-builder override for selecting between
+    /// non-strict tool use, strict tool use, and JSON-schema [`OutputFormat`]
+    /// structured output.
+    pub async fn request_for_with_inference_config(
+        &mut self,
+        template: MessageCreateParams,
+        text: &str,
+        inference_config: InferenceConfig,
+    ) -> Result<(ReportBuilder, MessageCreateParams), ApplyError> {
         let mut report = ReportBuilder::default();
         for policy in self.policies.iter() {
             report.add_policy(policy)?;
@@ -295,6 +376,74 @@ impl Manager {
                 MessageRole::User,
             ),
         );
+        configure_structured_output(&mut req, &report, inference_config);
+        Ok((report, req))
+    }
+}
+
+struct ExtractedIr {
+    ir: serde_json::Value,
+    feedback: FeedbackTarget,
+}
+
+enum FeedbackTarget {
+    Tool { tool_use_id: String },
+    Text,
+}
+
+fn extract_ir(
+    content: &[ContentBlock],
+    inference_config: InferenceConfig,
+) -> Result<ExtractedIr, ApplyError> {
+    if content.len() != 1 {
+        return Err(ApplyError::invalid_response(
+            format!("Expected exactly 1 content block, got {}", content.len()),
+            "Check that the LLM is configured correctly for the selected inference config",
+        ));
+    }
+    match inference_config {
+        InferenceConfig::ToolUse | InferenceConfig::StrictToolUse => {
+            let ContentBlock::ToolUse(t) = &content[0] else {
+                return Err(ApplyError::invalid_response(
+                    "Expected ToolUse content block",
+                    "The LLM should be using the output_json tool to provide structured output",
+                ));
+            };
+            Ok(ExtractedIr {
+                ir: t.input.clone(),
+                feedback: FeedbackTarget::Tool {
+                    tool_use_id: t.id.clone(),
+                },
+            })
+        }
+        InferenceConfig::OutputFormatJsonSchema => {
+            let ContentBlock::Text(t) = &content[0] else {
+                return Err(ApplyError::invalid_response(
+                    "Expected Text content block",
+                    "The LLM should return JSON text when OutputFormatJsonSchema is selected",
+                ));
+            };
+            let ir = serde_json::from_str(t.text.trim()).map_err(|err| {
+                ApplyError::invalid_response(
+                    format!("Could not parse JSON response: {err}"),
+                    "Check that the model response is valid JSON for the configured schema",
+                )
+            })?;
+            Ok(ExtractedIr {
+                ir,
+                feedback: FeedbackTarget::Text,
+            })
+        }
+    }
+}
+
+fn configure_structured_output(
+    req: &mut MessageCreateParams,
+    report: &ReportBuilder,
+    inference_config: InferenceConfig,
+) {
+    clear_output_format_config(req);
+    if inference_config.uses_tools() {
         req.tool_choice = Some(ToolChoice::tool("output_json"));
         req.tools = Some(vec![claudius::ToolUnionParam::CustomTool(
             claudius::ToolParam {
@@ -302,10 +451,23 @@ impl Manager {
                 description: Some("output JSON".to_string()),
                 input_schema: report.schema(),
                 cache_control: None,
-                strict: None,
+                strict: (inference_config == InferenceConfig::StrictToolUse).then_some(true),
             },
         )]);
-        Ok((report, req))
+    } else {
+        req.tool_choice = None;
+        req.tools = None;
+        req.output_format = Some(OutputFormat::json_schema(report.schema()));
+    }
+}
+
+fn clear_output_format_config(req: &mut MessageCreateParams) {
+    req.output_format = None;
+    if let Some(output_config) = &mut req.output_config {
+        output_config.format = None;
+        if output_config.effort.is_none() {
+            req.output_config = None;
+        }
     }
 }
 
@@ -351,6 +513,19 @@ mod tests {
         let manager = Manager::default();
         assert!(manager.is_empty());
         assert_eq!(manager.len(), 0);
+        assert_eq!(manager.inference_config(), InferenceConfig::ToolUse);
+    }
+
+    #[test]
+    fn manager_inference_config_can_be_set_before_apply() {
+        let mut manager = Manager::default().with_inference_config(InferenceConfig::StrictToolUse);
+        assert_eq!(manager.inference_config(), InferenceConfig::StrictToolUse);
+
+        manager.set_inference_config(InferenceConfig::OutputFormatJsonSchema);
+        assert_eq!(
+            manager.inference_config(),
+            InferenceConfig::OutputFormatJsonSchema
+        );
     }
 
     #[test]
@@ -431,6 +606,64 @@ mod tests {
         assert!(!req.messages.is_empty());
         assert!(req.system.is_some());
         assert_eq!(req.tool_choice, Some(ToolChoice::tool("output_json")));
+        assert!(!req.requires_structured_outputs_beta());
+    }
+
+    #[tokio::test]
+    async fn manager_request_for_strict_tool_use() {
+        let mut manager = Manager::default();
+        let template = MessageCreateParams::default();
+
+        let result = manager
+            .request_for_with_inference_config(
+                template,
+                "test text",
+                InferenceConfig::StrictToolUse,
+            )
+            .await;
+        assert!(result.is_ok());
+
+        let (_, req) = result.unwrap();
+        assert_eq!(req.tool_choice, Some(ToolChoice::tool("output_json")));
+        assert!(req.output_format.is_none());
+        assert!(req.requires_structured_outputs_beta());
+
+        let tools = req.tools.as_ref().expect("expected tools");
+        assert_eq!(tools.len(), 1);
+        match &tools[0] {
+            claudius::ToolUnionParam::CustomTool(tool) => {
+                assert_eq!(tool.name, "output_json");
+                assert_eq!(tool.strict, Some(true));
+            }
+            _ => panic!("expected custom tool"),
+        }
+    }
+
+    #[tokio::test]
+    async fn manager_request_for_output_format_json_schema() {
+        let mut manager = Manager::default();
+        let template = MessageCreateParams::default();
+
+        let result = manager
+            .request_for_with_inference_config(
+                template,
+                "test text",
+                InferenceConfig::OutputFormatJsonSchema,
+            )
+            .await;
+        assert!(result.is_ok());
+
+        let (_, req) = result.unwrap();
+        assert!(req.tool_choice.is_none());
+        assert!(req.tools.is_none());
+        assert!(req.requires_structured_outputs_beta());
+
+        match req.output_format.expect("expected output format") {
+            OutputFormat::JsonSchema { schema } => {
+                assert_eq!(schema["type"], "object");
+                assert!(schema["properties"].as_object().is_some());
+            }
+        }
     }
 
     #[tokio::test]
