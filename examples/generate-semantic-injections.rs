@@ -2,7 +2,10 @@ use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader};
 
 use arrrg::CommandLine;
-use claudius::{Anthropic, CacheControlEphemeral, Model, SystemPrompt, TextBlock, ThinkingConfig};
+use claudius::{
+    Anthropic, CacheControlEphemeral, Effort, Model, OutputConfig, SystemPrompt, TextBlock,
+    ThinkingConfig,
+};
 use rand::prelude::*;
 
 #[derive(Clone, Default, Debug, Eq, PartialEq, arrrg_derive::CommandLine)]
@@ -90,7 +93,7 @@ Text:
                 model: model.clone(),
                 cache_control: None,
                 metadata: None,
-                output_config: None,
+                output_config: Some(OutputConfig::new().with_effort(Effort::Medium)),
                 output_format: None,
                 stop_sequences: None,
                 system: Some(SystemPrompt::from_blocks(vec![TextBlock {
@@ -99,7 +102,7 @@ Text:
                     citations: None,
                 }])),
                 temperature: None,
-                thinking: Some(ThinkingConfig::enabled(1024)),
+                thinking: Some(ThinkingConfig::adaptive()),
                 tool_choice: None,
                 tools: None,
                 top_k: None,

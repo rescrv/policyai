@@ -1,6 +1,6 @@
 use claudius::{
-    Anthropic, ContentBlock, JsonSchema, MessageCreateParams, MessageParam, MessageRole, Model,
-    ToolChoice,
+    Anthropic, ContentBlock, Effort, JsonSchema, MessageCreateParams, MessageParam, MessageRole,
+    Model, OutputConfig, ThinkingConfig, ToolChoice,
 };
 use uuid::Uuid;
 
@@ -152,9 +152,9 @@ impl PolicyType {
                 MessageRole::User,
             )],
             system: Some(system.into()),
-            thinking: None,
+            thinking: Some(ThinkingConfig::adaptive()),
             metadata: None,
-            output_config: None,
+            output_config: Some(OutputConfig::new().with_effort(Effort::Medium)),
             output_format: None,
             stop_sequences: None,
             temperature: None,
