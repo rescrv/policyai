@@ -352,6 +352,7 @@ impl ReportBuilder {
         schema["type"] = "object".into();
         schema["required"] = self.required.clone().into();
         schema["properties"] = self.properties.clone();
+        schema["additionalProperties"] = false.into();
         schema
     }
 }
@@ -378,5 +379,18 @@ impl Default for ReportBuilder {
                 "__justification__": String::json_schema(),
             }},
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn schema_rejects_additional_properties() {
+        let schema = ReportBuilder::default().schema();
+
+        assert_eq!(schema["type"], "object");
+        assert_eq!(schema["additionalProperties"], false);
     }
 }

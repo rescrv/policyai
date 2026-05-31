@@ -95,11 +95,7 @@ pub async fn naive_apply(
         &mut req.messages,
         MessageParam::new_with_string(format!("<text>{text}</text>"), MessageRole::User),
     );
-    let mut schema = serde_json::json! {{}};
-    schema["type"] = "object".into();
-    schema["required"] = serde_json::Value::Array(vec![]);
-    schema["properties"] = properties;
-    configure_baseline_structured_output(&mut req, schema);
+    configure_baseline_structured_output(&mut req, baseline_output_schema(properties));
     let start_time = Instant::now();
     let resp = client.send(req).await?;
 
@@ -112,6 +108,15 @@ pub async fn naive_apply(
     }
 
     extract_baseline_response(&resp.content)
+}
+
+fn baseline_output_schema(properties: serde_json::Value) -> serde_json::Value {
+    let mut schema = serde_json::json! {{}};
+    schema["type"] = "object".into();
+    schema["required"] = serde_json::Value::Array(vec![]);
+    schema["properties"] = properties;
+    schema["additionalProperties"] = false.into();
+    schema
 }
 
 fn configure_baseline_structured_output(req: &mut MessageCreateParams, schema: serde_json::Value) {
@@ -475,6 +480,16 @@ mod tests {
         let err = extract_baseline_response(&content).unwrap_err();
 
         assert!(format!("{err:?}").contains("Expected exactly 1 JSON text block"));
+    }
+
+    #[test]
+    fn baseline_output_schema_rejects_additional_properties() {
+        let schema = baseline_output_schema(serde_json::json!({
+            "field": { "type": "string" }
+        }));
+
+        assert_eq!(schema["type"], "object");
+        assert_eq!(schema["additionalProperties"], false);
     }
 
     #[test]
