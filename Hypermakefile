@@ -1,5 +1,6 @@
 TEXTS := data/ai-tweets.jsonl
-SEMANTIC_INJECTIONS := 1000
+MODEL := claude-opus-4-8
+SEMANTIC_INJECTIONS := 10
 POLICIES_PER_TEXT := 10
 NEGATIVES_PER_TEXT := 10
 DATA_TYPE := ( bool number string enum-field array )
@@ -13,22 +14,22 @@ N := 3
 
 .PHONY: all
 
-all: @data/report-$(DATA_TYPE)-$(MATCHING)-$(POLICIES).jsonl @data/regressions-$(DATA_TYPE)-$(MATCHING)-$(POLICIES).jsonl
+all: @data/report-$(MODEL)-$(DATA_TYPE)-$(MATCHING)-$(POLICIES).jsonl @data/regressions-$(MODEL)-$(DATA_TYPE)-$(MATCHING)-$(POLICIES).jsonl
 
-data/semantic-injections.jsonl: $(TEXTS)
-	cargo run --example generate-semantic-injections -- --samples $(SEMANTIC_INJECTIONS) --policies $(POLICIES_PER_TEXT) --success $(K) --total $(N) $< > $@
+data/semantic-injections-$(MODEL).jsonl: $(TEXTS)
+	cargo run --example generate-semantic-injections -- --model $(MODEL) --samples $(SEMANTIC_INJECTIONS) --policies $(POLICIES_PER_TEXT) --success $(K) --total $(N) $< > $@
 
-data/decidables.jsonl: data/semantic-injections.jsonl
-	cargo run --example generate-decidables -- --policies $(NEGATIVES_PER_TEXT) --success $(K) --total $(N) $< > $@
+data/decidables-$(MODEL).jsonl: data/semantic-injections-$(MODEL).jsonl
+	cargo run --example generate-decidables -- --model $(MODEL) --policies $(NEGATIVES_PER_TEXT) --success $(K) --total $(N) $< > $@
 
 data/actions-$(DATA_TYPE).jsonl: data/policy
 	cargo run --example generate-actions -- --$(DATA_TYPE) < $< > $@
 
-data/test-data-$(DATA_TYPE)-$(MATCHING)-$(POLICIES).jsonl: data/actions-$(DATA_TYPE).jsonl data/decidables.jsonl
-	cargo run --example generate-test-data -- --actions data/actions-$(DATA_TYPE).jsonl --decidables data/decidables.jsonl --conflict-rate $(CONFLICT_RATE) --samples $(TEST_CASES) --policies "$(POLICIES)" --matching "$(MATCHING)" --policy data/policy > $@
+data/test-data-$(MODEL)-$(DATA_TYPE)-$(MATCHING)-$(POLICIES).jsonl: data/actions-$(DATA_TYPE).jsonl data/decidables-$(MODEL).jsonl
+	cargo run --example generate-test-data -- --actions data/actions-$(DATA_TYPE).jsonl --decidables data/decidables-$(MODEL).jsonl --conflict-rate $(CONFLICT_RATE) --samples $(TEST_CASES) --policies "$(POLICIES)" --matching "$(MATCHING)" --policy data/policy > $@
 
-data/report-$(DATA_TYPE)-$(MATCHING)-$(POLICIES).jsonl: data/test-data-$(DATA_TYPE)-$(MATCHING)-$(POLICIES).jsonl
-	cargo run --bin policyai-evaluate-policies -- $< > $@
+data/report-$(MODEL)-$(DATA_TYPE)-$(MATCHING)-$(POLICIES).jsonl: data/test-data-$(MODEL)-$(DATA_TYPE)-$(MATCHING)-$(POLICIES).jsonl
+	cargo run --bin policyai-evaluate-policies -- --model $(MODEL) $< > $@
 
-data/regressions-$(DATA_TYPE)-$(MATCHING)-$(POLICIES).jsonl: data/report-$(DATA_TYPE)-$(MATCHING)-$(POLICIES).jsonl
+data/regressions-$(MODEL)-$(DATA_TYPE)-$(MATCHING)-$(POLICIES).jsonl: data/report-$(MODEL)-$(DATA_TYPE)-$(MATCHING)-$(POLICIES).jsonl
 	cargo run --bin policyai-extract-regressions -- --include-baseline-failures $< > $@
