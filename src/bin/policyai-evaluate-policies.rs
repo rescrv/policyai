@@ -2,12 +2,14 @@ use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader};
 use std::time::Instant;
 
+use arrrg::CommandLine;
 use claudius::{
-    push_or_merge_message, Anthropic, ContentBlock, JsonSchema, MessageCreateParams, MessageParam,
-    MessageRole, Metadata, Model, SystemPrompt, TextBlock, ToolChoice,
+    push_or_merge_message, Anthropic, ContentBlock, Effort, JsonSchema, MessageCreateParams,
+    MessageParam, MessageRole, Metadata, Model, OutputFormat, SystemPrompt, TextBlock,
+    ThinkingConfig,
 };
 
-use policyai::data::{EvaluationReport, Metrics, TestDataPoint};
+use policyai::data::{EffortArg, EvaluationReport, Metrics, TestDataPoint, ThinkingArg};
 use policyai::{ApplyError, Field, Manager, Policy, Report, Usage, DEFAULT_MODEL};
 
 pub async fn naive_apply(
@@ -93,20 +95,7 @@ pub async fn naive_apply(
         &mut req.messages,
         MessageParam::new_with_string(format!("<text>{text}</text>"), MessageRole::User),
     );
-    let mut schema = serde_json::json! {{}};
-    schema["type"] = "object".into();
-    schema["required"] = serde_json::Value::Array(vec![]);
-    schema["properties"] = properties;
-    req.tool_choice = Some(ToolChoice::tool("output_json"));
-    req.tools = Some(vec![claudius::ToolUnionParam::CustomTool(
-        claudius::ToolParam {
-            name: "output_json".to_string(),
-            description: Some("output JSON according to policy".to_string()),
-            input_schema: schema,
-            cache_control: None,
-            strict: None,
-        },
-    )]);
+    configure_baseline_structured_output(&mut req, baseline_output_schema(properties));
     let start_time = Instant::now();
     let resp = client.send(req).await?;
 
@@ -118,22 +107,65 @@ pub async fn naive_apply(
         u.set_wall_clock_time(start_time.elapsed());
     }
 
-    if resp.content.len() != 1 {
+    extract_baseline_response(&resp.content)
+}
+
+fn baseline_output_schema(properties: serde_json::Value) -> serde_json::Value {
+    let mut schema = serde_json::json! {{}};
+    schema["type"] = "object".into();
+    schema["required"] = serde_json::Value::Array(vec![]);
+    schema["properties"] = properties;
+    schema["additionalProperties"] = false.into();
+    schema
+}
+
+fn configure_baseline_structured_output(req: &mut MessageCreateParams, schema: serde_json::Value) {
+    req.tool_choice = None;
+    req.tools = None;
+    if let Some(output_config) = &mut req.output_config {
+        req.output_format = None;
+        output_config.format = Some(OutputFormat::json_schema(schema));
+    } else {
+        req.output_format = Some(OutputFormat::json_schema(schema));
+    }
+}
+
+fn extract_baseline_response(content: &[ContentBlock]) -> Result<serde_json::Value, ApplyError> {
+    let mut json_text_blocks = 0;
+    let mut other_blocks = 0;
+    let mut text = None;
+    for block in content {
+        match block {
+            ContentBlock::Thinking(_) | ContentBlock::RedactedThinking(_) => {}
+            ContentBlock::Text(t) if !t.text.trim().is_empty() => {
+                json_text_blocks += 1;
+                text = Some(t.text.trim());
+            }
+            _ => other_blocks += 1,
+        }
+    }
+    let Some(text) = text else {
         return Err(ApplyError::invalid_response(
             format!(
-                "Expected exactly 1 content block, got {}",
-                resp.content.len()
+                "Expected exactly 1 JSON text block after ignoring thinking blocks, got {json_text_blocks} JSON text blocks and {other_blocks} other blocks"
             ),
-            "The baseline evaluator expects the model to call the output_json tool once",
-        ));
-    }
-    let ContentBlock::ToolUse(t) = &resp.content[0] else {
-        return Err(ApplyError::invalid_response(
-            "Expected ToolUse content block",
-            "The baseline evaluator expects the model to use the output_json tool",
+            "The baseline evaluator expects JSON schema text output",
         ));
     };
-    Ok(t.input.clone())
+    if json_text_blocks != 1 || other_blocks != 0 {
+        return Err(ApplyError::invalid_response(
+            format!(
+                "Expected exactly 1 JSON text block after ignoring thinking blocks, got {json_text_blocks} JSON text blocks and {other_blocks} other blocks"
+            ),
+            "The baseline evaluator expects JSON schema text output",
+        ));
+    }
+    serde_json::from_str(text).map_err(|err| {
+        ApplyError::invalid_response(
+            format!("Could not parse baseline JSON response: {err}"),
+            "Check that the baseline model response is valid JSON for the configured schema",
+        )
+    })
 }
 
 fn values_match(expected: &serde_json::Value, actual: &serde_json::Value) -> bool {
@@ -252,7 +284,9 @@ fn calculate_field_metrics(
 
 #[tokio::main]
 async fn main() {
-    let (model, files) = parse_args();
+    let (options, files) =
+        CliOptions::from_command_line_relaxed("USAGE: policyai-evaluate-policies [OPTIONS] FILES");
+    let options = RuntimeOptions::from(options);
     let client = Anthropic::new(None).unwrap();
     for file in files {
         let file = OpenOptions::new()
@@ -287,8 +321,13 @@ async fn main() {
                 &client,
                 &point.policies,
                 &MessageCreateParams {
-                    max_tokens: 4096,
-                    model: model.clone(),
+                    max_tokens: options.max_tokens,
+                    model: options.model.clone(),
+                    thinking: options.thinking,
+                    output_config: policyai::data::output_config_for_thinking(
+                        options.thinking,
+                        options.effort,
+                    ),
                     ..Default::default()
                 },
                 &point.text,
@@ -327,8 +366,13 @@ async fn main() {
                     .apply(
                         &client,
                         MessageCreateParams {
-                            max_tokens: 4096,
-                            model: model.clone(),
+                            max_tokens: options.max_tokens,
+                            model: options.model.clone(),
+                            thinking: options.thinking,
+                            output_config: policyai::data::output_config_for_thinking(
+                                options.thinking,
+                                options.effort,
+                            ),
                             ..Default::default()
                         },
                         &point.text,
@@ -370,29 +414,83 @@ async fn main() {
     }
 }
 
-fn parse_args() -> (Model, Vec<String>) {
-    let mut model = DEFAULT_MODEL;
-    let mut files = Vec::new();
-    let mut args = std::env::args().skip(1);
-    while let Some(arg) = args.next() {
-        if arg == "--model" {
-            let Some(value) = args.next() else {
-                eprintln!("--model requires a value");
-                std::process::exit(2);
-            };
-            model = value.parse::<Model>().unwrap();
-        } else if let Some(value) = arg.strip_prefix("--model=") {
-            model = value.parse::<Model>().unwrap();
-        } else {
-            files.push(arg);
+#[derive(Clone, Default, Debug, Eq, PartialEq, arrrg_derive::CommandLine)]
+struct CliOptions {
+    #[arrrg(optional, "Anthropic model to use for evaluation.")]
+    model: Option<String>,
+    #[arrrg(optional, "Maximum output tokens for each request.")]
+    max_tokens: Option<u32>,
+    #[arrrg(optional, "Thinking config: adaptive, disabled, or a token budget.")]
+    thinking: Option<ThinkingArg>,
+    #[arrrg(optional, "Adaptive thinking effort: low, medium, or high.")]
+    effort: Option<EffortArg>,
+}
+
+struct RuntimeOptions {
+    model: Model,
+    max_tokens: u32,
+    thinking: Option<ThinkingConfig>,
+    effort: Option<Effort>,
+}
+
+impl From<CliOptions> for RuntimeOptions {
+    fn from(options: CliOptions) -> Self {
+        Self {
+            model: options
+                .model
+                .as_deref()
+                .map(|model| model.parse::<Model>().unwrap())
+                .unwrap_or(DEFAULT_MODEL),
+            max_tokens: options.max_tokens.unwrap_or(4096),
+            thinking: Some(
+                options
+                    .thinking
+                    .map(Into::into)
+                    .unwrap_or_else(ThinkingConfig::adaptive),
+            ),
+            effort: Some(options.effort.map(Into::into).unwrap_or(Effort::High)),
         }
     }
-    (model, files)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use claudius::ThinkingBlock;
+
+    #[test]
+    fn baseline_response_ignores_thinking_blocks() {
+        let content = vec![
+            ContentBlock::Thinking(ThinkingBlock::new("thinking", "signature")),
+            ContentBlock::Text(TextBlock::new(r#"{"field":"value"}"#)),
+        ];
+
+        let extracted = extract_baseline_response(&content).unwrap();
+
+        assert_eq!(extracted, serde_json::json!({"field": "value"}));
+    }
+
+    #[test]
+    fn baseline_response_rejects_multiple_json_text_blocks() {
+        let content = vec![
+            ContentBlock::Text(TextBlock::new(r#"{"a":1}"#)),
+            ContentBlock::Text(TextBlock::new(r#"{"b":2}"#)),
+        ];
+
+        let err = extract_baseline_response(&content).unwrap_err();
+
+        assert!(format!("{err:?}").contains("Expected exactly 1 JSON text block"));
+    }
+
+    #[test]
+    fn baseline_output_schema_rejects_additional_properties() {
+        let schema = baseline_output_schema(serde_json::json!({
+            "field": { "type": "string" }
+        }));
+
+        assert_eq!(schema["type"], "object");
+        assert_eq!(schema["additionalProperties"], false);
+    }
 
     #[test]
     fn evaluation_report_minimal() {

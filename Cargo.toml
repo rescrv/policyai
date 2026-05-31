@@ -12,13 +12,12 @@ arrrg = "0.10.0"
 arrrg_derive = "0.10.0"
 claudius = "0.31.0"
 getopts = "0.2.24"
+guacamole = "0.16.0"
 serde = "1.0.228"
 serde_json = { version = "1.0.150", features = ["preserve_order"] }
 tokio = { version = "1.52.3", features = ["rt", "macros"] }
-uuid = { version = "1.18.1", features = ["v4"] }
 
 [dev-dependencies]
 biometrics = "0.14"
 biometrics_prometheus = "0.12"
-guacamole = "0.16.0"
 rand = "0.10.1"

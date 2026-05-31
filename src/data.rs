@@ -6,11 +6,98 @@
 
 use claudius::{
     Anthropic, CacheControlEphemeral, ContentBlock, Effort, MessageCreateParams, MessageParam,
-    MessageParamContent, MessageRole, Model, OutputConfig, StopReason, SystemPrompt, TextBlock,
-    ThinkingConfig,
+    MessageParamContent, MessageRole, Model, OutputConfig, SystemPrompt, TextBlock, ThinkingConfig,
 };
 
 use crate::{Policy, Report, Usage};
+
+/// Command-line wrapper for [`ThinkingConfig`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ThinkingArg(pub ThinkingConfig);
+
+impl Eq for ThinkingArg {}
+
+impl std::str::FromStr for ThinkingArg {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "adaptive" => Ok(Self(ThinkingConfig::adaptive())),
+            "disabled" | "none" | "off" => Ok(Self(ThinkingConfig::disabled())),
+            value => value
+                .parse::<u32>()
+                .map(|budget| Self(ThinkingConfig::enabled(budget)))
+                .map_err(|_| {
+                    format!("expected thinking to be adaptive, disabled, or a token budget; got {value:?}")
+                }),
+        }
+    }
+}
+
+impl std::fmt::Display for ThinkingArg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.0 == ThinkingConfig::adaptive() {
+            write!(f, "adaptive")
+        } else if self.0 == ThinkingConfig::disabled() {
+            write!(f, "disabled")
+        } else {
+            write!(f, "{}", self.0.num_tokens())
+        }
+    }
+}
+
+impl From<ThinkingArg> for ThinkingConfig {
+    fn from(value: ThinkingArg) -> Self {
+        value.0
+    }
+}
+
+/// Command-line wrapper for [`Effort`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EffortArg(pub Effort);
+
+impl std::str::FromStr for EffortArg {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "low" => Ok(Self(Effort::Low)),
+            "medium" => Ok(Self(Effort::Medium)),
+            "high" => Ok(Self(Effort::High)),
+            _ => Err(format!(
+                "expected effort to be one of low, medium, high; got {value:?}"
+            )),
+        }
+    }
+}
+
+impl std::fmt::Display for EffortArg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            Effort::Low => write!(f, "low"),
+            Effort::Medium => write!(f, "medium"),
+            Effort::High => write!(f, "high"),
+        }
+    }
+}
+
+impl From<EffortArg> for Effort {
+    fn from(value: EffortArg) -> Self {
+        value.0
+    }
+}
+
+/// Build the output configuration that carries adaptive thinking effort.
+pub fn output_config_for_thinking(
+    thinking: Option<ThinkingConfig>,
+    effort: Option<Effort>,
+) -> Option<OutputConfig> {
+    if matches!(thinking, Some(ThinkingConfig::Adaptive)) {
+        effort.map(|effort| OutputConfig::new().with_effort(effort))
+    } else {
+        None
+    }
+}
 
 /// A semantic injection with multiple candidate injections and their rationales.
 ///
@@ -53,6 +140,9 @@ pub struct SemanticInjection {
 /// * `k` - Minimum number of successes required
 /// * `n` - Maximum number of attempts to make
 /// * `model` - The model to use for policy applicability checks
+/// * `max_tokens` - The maximum output token budget for each check
+/// * `thinking` - Thinking configuration for each check
+/// * `effort` - Adaptive thinking effort, used when `thinking` is adaptive
 ///
 /// # Returns
 ///
@@ -66,7 +156,7 @@ pub struct SemanticInjection {
 /// # Examples
 ///
 /// ```no_run
-/// use claudius::Anthropic;
+/// use claudius::{Anthropic, Effort, ThinkingConfig};
 /// use policyai::{data::policy_applies, DEFAULT_MODEL};
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -77,11 +167,15 @@ pub struct SemanticInjection {
 ///     "If text indicates urgency, mark as high priority",
 ///     3,  // Need 3 successes
 ///     5,  // Out of 5 attempts
-///     DEFAULT_MODEL
+///     DEFAULT_MODEL,
+///     1030,
+///     Some(ThinkingConfig::adaptive()),
+///     Some(Effort::Medium)
 /// ).await?;
 /// # Ok(())
 /// # }
 /// ```
+#[allow(clippy::too_many_arguments)]
 pub async fn policy_applies(
     client: &Anthropic,
     text: &str,
@@ -89,8 +183,23 @@ pub async fn policy_applies(
     k: usize,
     n: usize,
     model: Model,
+    max_tokens: u32,
+    thinking: Option<ThinkingConfig>,
+    effort: Option<Effort>,
 ) -> Result<bool, claudius::Error> {
-    Ok(apply_policy_fractional(client, text, semantic_injection, k, n, model).await? >= k)
+    Ok(apply_policy_fractional(
+        client,
+        text,
+        semantic_injection,
+        k,
+        n,
+        model,
+        max_tokens,
+        thinking,
+        effort,
+    )
+    .await?
+        >= k)
 }
 
 /// Determine if a policy does NOT apply to given text with statistical confidence.
@@ -107,6 +216,9 @@ pub async fn policy_applies(
 /// * `k` - Minimum number of successes that would indicate the policy applies
 /// * `n` - Maximum number of attempts to make
 /// * `model` - The model to use for policy applicability checks
+/// * `max_tokens` - The maximum output token budget for each check
+/// * `thinking` - Thinking configuration for each check
+/// * `effort` - Adaptive thinking effort, used when `thinking` is adaptive
 ///
 /// # Returns
 ///
@@ -120,7 +232,7 @@ pub async fn policy_applies(
 /// # Examples
 ///
 /// ```no_run
-/// use claudius::Anthropic;
+/// use claudius::{Anthropic, Effort, ThinkingConfig};
 /// use policyai::{data::policy_does_not_apply, DEFAULT_MODEL};
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -131,11 +243,15 @@ pub async fn policy_applies(
 ///     "If text indicates urgency, mark as high priority",
 ///     3,  // Would need 3 successes to apply
 ///     5,  // Out of 5 attempts
-///     DEFAULT_MODEL
+///     DEFAULT_MODEL,
+///     1030,
+///     Some(ThinkingConfig::adaptive()),
+///     Some(Effort::Medium)
 /// ).await?;
 /// # Ok(())
 /// # }
 /// ```
+#[allow(clippy::too_many_arguments)]
 pub async fn policy_does_not_apply(
     client: &Anthropic,
     text: &str,
@@ -143,13 +259,26 @@ pub async fn policy_does_not_apply(
     k: usize,
     n: usize,
     model: Model,
+    max_tokens: u32,
+    thinking: Option<ThinkingConfig>,
+    effort: Option<Effort>,
 ) -> Result<bool, claudius::Error> {
-    Ok(
-        apply_policy_fractional(client, text, semantic_injection, k, n, model).await?
-            <= n.saturating_sub(k),
+    Ok(apply_policy_fractional(
+        client,
+        text,
+        semantic_injection,
+        k,
+        n,
+        model,
+        max_tokens,
+        thinking,
+        effort,
     )
+    .await?
+        <= n.saturating_sub(k))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn apply_policy_fractional(
     client: &Anthropic,
     text: &str,
@@ -157,6 +286,9 @@ async fn apply_policy_fractional(
     k: usize,
     n: usize,
     model: Model,
+    max_tokens: u32,
+    thinking: Option<ThinkingConfig>,
+    effort: Option<Effort>,
 ) -> Result<usize, claudius::Error> {
     let mut success = 0;
     let mut total = 0;
@@ -178,67 +310,138 @@ Say, "no" to indicate the policy does not apply.
 Output just this one-word answer
 "#
         .to_string();
-        let req = MessageCreateParams {
-            max_tokens: 1030,
-            model: model.clone(),
-            cache_control: None,
-            system: Some(SystemPrompt::from_blocks(vec![TextBlock {
-                text: system.to_string(),
-                cache_control: Some(CacheControlEphemeral::new()),
-                citations: None,
-            }])),
-            messages: vec![MessageParam {
-                content: MessageParamContent::Array(vec![
-                    ContentBlock::Text(TextBlock {
-                        text: format!("<policy>{semantic_injection}</policy>"),
-                        cache_control: None,
-                        citations: None,
-                    }),
-                    ContentBlock::Text(TextBlock {
-                        text: format!("<text>{text}</text>"),
-                        cache_control: None,
-                        citations: None,
-                    }),
-                ]),
-                role: MessageRole::User,
-            }],
-            stop_sequences: Some(vec!["yes".to_string(), "no".to_string()]),
-            thinking: Some(ThinkingConfig::adaptive()),
-            stream: false,
-            metadata: None,
-            output_config: Some(OutputConfig::new().with_effort(Effort::Medium)),
-            output_format: None,
-            temperature: None,
-            tools: None,
-            tool_choice: None,
-            top_p: None,
-            top_k: None,
-            betas: None,
-        };
+        let req = policy_application_request(
+            &system,
+            text,
+            semantic_injection,
+            model.clone(),
+            max_tokens,
+            thinking,
+            effort,
+        );
         let resp = client.send(req).await?;
-        if !matches!(resp.stop_reason, Some(StopReason::StopSequence)) {
-            return Err(claudius::Error::unknown(
-                "did not get a stop sequence".to_string(),
-            ));
-        }
-        match resp.stop_sequence.as_deref() {
-            Some("yes") => {
-                success += 1;
-            }
-            Some("no") => {}
-            Some(_) => {
-                return Err(claudius::Error::unknown(
-                    "expected yes/no stop sequence".to_string(),
-                ));
+        let answer = match policy_applies_answer(resp.stop_sequence.as_deref(), &resp.content)? {
+            Some(answer) => answer,
+            None if thinking.is_some_and(|thinking| thinking != ThinkingConfig::Disabled) => {
+                let req = policy_application_request(
+                    &system,
+                    text,
+                    semantic_injection,
+                    model.clone(),
+                    max_tokens,
+                    None,
+                    None,
+                );
+                let resp = client.send(req).await?;
+                policy_applies_answer(resp.stop_sequence.as_deref(), &resp.content)?.ok_or_else(
+                    || {
+                        claudius::Error::unknown(
+                            "expected yes/no answer after retry without thinking, got empty response"
+                                .to_string(),
+                        )
+                    },
+                )?
             }
             None => {
                 return Err(claudius::Error::unknown(
-                    "expected stop sequence".to_string(),
+                    "expected yes/no answer, got empty response".to_string(),
                 ));
             }
+        };
+        if answer {
+            success += 1;
         }
     }
     Ok(success)
+}
+
+fn policy_application_request(
+    system: &str,
+    text: &str,
+    semantic_injection: &str,
+    model: Model,
+    max_tokens: u32,
+    thinking: Option<ThinkingConfig>,
+    effort: Option<Effort>,
+) -> MessageCreateParams {
+    MessageCreateParams {
+        max_tokens,
+        model,
+        cache_control: None,
+        system: Some(SystemPrompt::from_blocks(vec![TextBlock {
+            text: system.to_string(),
+            cache_control: Some(CacheControlEphemeral::new()),
+            citations: None,
+        }])),
+        messages: vec![MessageParam {
+            content: MessageParamContent::Array(vec![
+                ContentBlock::Text(TextBlock {
+                    text: format!("<policy>{semantic_injection}</policy>"),
+                    cache_control: None,
+                    citations: None,
+                }),
+                ContentBlock::Text(TextBlock {
+                    text: format!("<text>{text}</text>"),
+                    cache_control: None,
+                    citations: None,
+                }),
+            ]),
+            role: MessageRole::User,
+        }],
+        // Do not use "yes" or "no" as stop sequences here. Stop sequences can match inside
+        // thinking blocks before the model has emitted a visible final answer.
+        stop_sequences: None,
+        thinking,
+        stream: false,
+        metadata: None,
+        output_config: output_config_for_thinking(thinking, effort),
+        output_format: None,
+        temperature: None,
+        tools: None,
+        tool_choice: None,
+        top_p: None,
+        top_k: None,
+        betas: None,
+    }
+}
+
+fn policy_applies_answer(
+    stop_sequence: Option<&str>,
+    content: &[ContentBlock],
+) -> Result<Option<bool>, claudius::Error> {
+    match stop_sequence {
+        Some("yes") => return Ok(Some(true)),
+        Some("no") => return Ok(Some(false)),
+        Some(other) => {
+            return Err(claudius::Error::unknown(format!(
+                "expected yes/no stop sequence, got {other:?}"
+            )));
+        }
+        None => {}
+    }
+
+    let answer = content
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text(text) => Some(text.text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if answer.trim().is_empty() {
+        return Ok(None);
+    }
+    let first_word = answer
+        .split(|ch: char| !ch.is_ascii_alphabetic())
+        .find(|word| !word.is_empty())
+        .map(str::to_ascii_lowercase);
+    match first_word.as_deref() {
+        Some("yes") => Ok(Some(true)),
+        Some("no") => Ok(Some(false)),
+        _ => Err(claudius::Error::unknown(format!(
+            "expected yes/no answer, got {answer:?}"
+        ))),
+    }
 }
 
 /// A semantic injection test case with positive and negative examples.
@@ -498,6 +701,24 @@ mod tests {
         assert_eq!(injection.injections, deserialized.injections);
         assert_eq!(injection.rationales, deserialized.rationales);
         assert_eq!(injection.text, deserialized.text);
+    }
+
+    #[test]
+    fn policy_applies_answer_reads_visible_text() {
+        let content = vec![claudius::ContentBlock::Text(claudius::TextBlock::new(
+            "yes",
+        ))];
+
+        assert_eq!(policy_applies_answer(None, &content).unwrap(), Some(true));
+    }
+
+    #[test]
+    fn policy_applies_answer_ignores_thinking_for_empty_answer() {
+        let content = vec![claudius::ContentBlock::Thinking(
+            claudius::ThinkingBlock::new("yes, this applies", "signature"),
+        )];
+
+        assert_eq!(policy_applies_answer(None, &content).unwrap(), None);
     }
 
     #[test]

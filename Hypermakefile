@@ -1,5 +1,15 @@
 TEXTS := data/ai-tweets.jsonl
-SEMANTIC_INJECTIONS := 1000
+MODEL := claude-opus-4-8
+MODEL_ALIAS := opus-4-8
+RUN_ALIAS := opus-4-8-think-adaptive
+#MODEL := accounts/fireworks/models/kimi-k2p6
+#MODEL_ALIAS := kimi-k2p6
+#RUN_ALIAS := kimi-k2p6-think-1024
+MAX_TOKENS := 16384
+THINKING_ARGS := --thinking adaptive
+REPORT_THINKING_ARGS :=
+MAX_ATTEMPTS_PER_POLICY := 10
+SEMANTIC_INJECTIONS := 10
 POLICIES_PER_TEXT := 10
 NEGATIVES_PER_TEXT := 10
 DATA_TYPE := ( bool number string enum-field array )
@@ -13,22 +23,22 @@ N := 3
 
 .PHONY: all
 
-all: @data/report-$(DATA_TYPE)-$(MATCHING)-$(POLICIES).jsonl @data/regressions-$(DATA_TYPE)-$(MATCHING)-$(POLICIES).jsonl
+all: @data/report-$(RUN_ALIAS)-$(DATA_TYPE)-$(MATCHING)-$(POLICIES).jsonl @data/regressions-$(RUN_ALIAS)-$(DATA_TYPE)-$(MATCHING)-$(POLICIES).jsonl
 
-data/semantic-injections.jsonl: $(TEXTS)
-	cargo run --example generate-semantic-injections -- --samples $(SEMANTIC_INJECTIONS) --policies $(POLICIES_PER_TEXT) --success $(K) --total $(N) $< > $@
+data/semantic-injections-$(RUN_ALIAS).jsonl: $(TEXTS)
+	cargo run --example generate-semantic-injections -- --model $(MODEL) --max-tokens $(MAX_TOKENS) $(THINKING_ARGS) --max-attempts-per-policy $(MAX_ATTEMPTS_PER_POLICY) --samples $(SEMANTIC_INJECTIONS) --policies $(POLICIES_PER_TEXT) --success $(K) --total $(N) $< > $@
 
-data/decidables.jsonl: data/semantic-injections.jsonl
-	cargo run --example generate-decidables -- --policies $(NEGATIVES_PER_TEXT) --success $(K) --total $(N) $< > $@
+data/decidables-$(RUN_ALIAS).jsonl: data/semantic-injections-$(RUN_ALIAS).jsonl
+	cargo run --example generate-decidables -- --model $(MODEL) --max-tokens $(MAX_TOKENS) $(THINKING_ARGS) --policies $(NEGATIVES_PER_TEXT) --success $(K) --total $(N) $< > $@
 
 data/actions-$(DATA_TYPE).jsonl: data/policy
 	cargo run --example generate-actions -- --$(DATA_TYPE) < $< > $@
 
-data/test-data-$(DATA_TYPE)-$(MATCHING)-$(POLICIES).jsonl: data/actions-$(DATA_TYPE).jsonl data/decidables.jsonl
-	cargo run --example generate-test-data -- --actions data/actions-$(DATA_TYPE).jsonl --decidables data/decidables.jsonl --conflict-rate $(CONFLICT_RATE) --samples $(TEST_CASES) --policies "$(POLICIES)" --matching "$(MATCHING)" --policy data/policy > $@
+data/test-data-$(RUN_ALIAS)-$(DATA_TYPE)-$(MATCHING)-$(POLICIES).jsonl: data/actions-$(DATA_TYPE).jsonl data/decidables-$(RUN_ALIAS).jsonl
+	cargo run --example generate-test-data -- --actions data/actions-$(DATA_TYPE).jsonl --decidables data/decidables-$(RUN_ALIAS).jsonl --conflict-rate $(CONFLICT_RATE) --samples $(TEST_CASES) --policies "$(POLICIES)" --matching "$(MATCHING)" --policy data/policy > $@
 
-data/report-$(DATA_TYPE)-$(MATCHING)-$(POLICIES).jsonl: data/test-data-$(DATA_TYPE)-$(MATCHING)-$(POLICIES).jsonl
-	cargo run --bin policyai-evaluate-policies -- $< > $@
+data/report-$(RUN_ALIAS)-$(DATA_TYPE)-$(MATCHING)-$(POLICIES).jsonl: data/test-data-$(RUN_ALIAS)-$(DATA_TYPE)-$(MATCHING)-$(POLICIES).jsonl
+	cargo run --bin policyai-evaluate-policies -- --model $(MODEL) --max-tokens $(MAX_TOKENS) $(REPORT_THINKING_ARGS) $< > $@
 
-data/regressions-$(DATA_TYPE)-$(MATCHING)-$(POLICIES).jsonl: data/report-$(DATA_TYPE)-$(MATCHING)-$(POLICIES).jsonl
+data/regressions-$(RUN_ALIAS)-$(DATA_TYPE)-$(MATCHING)-$(POLICIES).jsonl: data/report-$(RUN_ALIAS)-$(DATA_TYPE)-$(MATCHING)-$(POLICIES).jsonl
 	cargo run --bin policyai-extract-regressions -- --include-baseline-failures $< > $@
