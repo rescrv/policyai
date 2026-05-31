@@ -16,11 +16,11 @@ use crate::{ApplyError, Policy, PolicyError, Report, ReportBuilder, Usage};
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum InferenceConfig {
     /// Use the `output_json` tool without strict structured-output validation.
-    #[default]
     ToolUse,
     /// Use the `output_json` tool with `strict: true`.
     StrictToolUse,
     /// Use [`OutputFormat::JsonSchema`] instead of tool use.
+    #[default]
     OutputFormatJsonSchema,
 }
 
@@ -203,19 +203,22 @@ impl Manager {
                 usage.increment_iterations();
             }
             let extracted = extract_ir(&resp.content, inference_config)?;
-            let ir = extracted.ir;
-            let Some(reportedly_matched) = ir.get("__rule_numbers__").cloned() else {
-                continue;
-            };
-            let Some(mut reportedly_matched): Option<Vec<usize>> =
-                serde_json::from_value(reportedly_matched).ok()
-            else {
-                continue;
-            };
-            let report = report.clone().consume_ir(ir.clone())?;
+            let mut ir = extracted.ir;
+            let mut report = report.clone().consume_ir(ir.clone())?;
             let mut empirically_matched = report.rules_matched.clone();
             empirically_matched.sort();
             empirically_matched.dedup();
+            let Some(mut reportedly_matched): Option<Vec<usize>> = ir
+                .get("__rule_numbers__")
+                .cloned()
+                .and_then(|value| serde_json::from_value(value).ok())
+            else {
+                normalize_reported_rule_numbers(&mut report, &mut ir, &empirically_matched);
+                if let Some(usage) = &mut usage {
+                    usage.set_wall_clock_time(start_time.elapsed());
+                }
+                return Ok(report);
+            };
             reportedly_matched.sort();
             reportedly_matched.dedup();
             if *empirically_matched == reportedly_matched {
@@ -235,6 +238,13 @@ impl Manager {
                 .filter(|x| !empirically_matched.iter().any(|y| **x == *y))
                 .cloned()
                 .collect::<Vec<_>>();
+            if reported_but_not_empirical.is_empty() {
+                normalize_reported_rule_numbers(&mut report, &mut ir, &empirically_matched);
+                if let Some(usage) = &mut usage {
+                    usage.set_wall_clock_time(start_time.elapsed());
+                }
+                return Ok(report);
+            }
             let mut content =
                 "<instruction>The reported rule numbers do not match the fields that were output.  Re-evaluate your output to resolve the following inconsistencies.</instruction>"
                     .to_string();
@@ -399,11 +409,13 @@ impl Manager {
     }
 }
 
+#[derive(Debug)]
 struct ExtractedIr {
     ir: serde_json::Value,
     feedback: FeedbackTarget,
 }
 
+#[derive(Debug)]
 enum FeedbackTarget {
     Tool { tool_use_id: String },
     Text,
@@ -414,20 +426,37 @@ fn extract_ir(
     content: &[ContentBlock],
     inference_config: InferenceConfig,
 ) -> Result<ExtractedIr, ApplyError> {
-    if content.len() != 1 {
-        return Err(ApplyError::invalid_response(
-            format!("Expected exactly 1 content block, got {}", content.len()),
-            "Check that the LLM is configured correctly for the selected inference config",
-        ));
-    }
     match inference_config {
         InferenceConfig::ToolUse | InferenceConfig::StrictToolUse => {
-            let ContentBlock::ToolUse(t) = &content[0] else {
+            let mut output_json_blocks = 0;
+            let mut other_blocks = 0;
+            let mut tool_use = None;
+            for block in content {
+                match block {
+                    ContentBlock::Thinking(_) | ContentBlock::RedactedThinking(_) => {}
+                    ContentBlock::ToolUse(t) if t.name == "output_json" => {
+                        output_json_blocks += 1;
+                        tool_use = Some(t);
+                    }
+                    _ => other_blocks += 1,
+                }
+            }
+            let Some(t) = tool_use else {
                 return Err(ApplyError::invalid_response(
-                    "Expected ToolUse content block",
+                    format!(
+                        "Expected exactly 1 output_json tool_use block after ignoring thinking blocks, got {output_json_blocks} output_json blocks and {other_blocks} other blocks"
+                    ),
                     "The LLM should be using the output_json tool to provide structured output",
                 ));
             };
+            if output_json_blocks != 1 || other_blocks != 0 {
+                return Err(ApplyError::invalid_response(
+                    format!(
+                        "Expected exactly 1 output_json tool_use block after ignoring thinking blocks, got {output_json_blocks} output_json blocks and {other_blocks} other blocks"
+                    ),
+                    "The LLM should be using the output_json tool to provide structured output",
+                ));
+            }
             Ok(ExtractedIr {
                 ir: t.input.clone(),
                 feedback: FeedbackTarget::Tool {
@@ -436,13 +465,36 @@ fn extract_ir(
             })
         }
         InferenceConfig::OutputFormatJsonSchema => {
-            let ContentBlock::Text(t) = &content[0] else {
+            let mut json_text_blocks = 0;
+            let mut other_blocks = 0;
+            let mut text = None;
+            for block in content {
+                match block {
+                    ContentBlock::Thinking(_) | ContentBlock::RedactedThinking(_) => {}
+                    ContentBlock::Text(t) if !t.text.trim().is_empty() => {
+                        json_text_blocks += 1;
+                        text = Some(t.text.trim());
+                    }
+                    _ => other_blocks += 1,
+                }
+            }
+            let Some(text) = text else {
                 return Err(ApplyError::invalid_response(
-                    "Expected Text content block",
+                    format!(
+                        "Expected exactly 1 JSON text block after ignoring thinking blocks, got {json_text_blocks} JSON text blocks and {other_blocks} other blocks"
+                    ),
                     "The LLM should return JSON text when OutputFormatJsonSchema is selected",
                 ));
             };
-            let ir = serde_json::from_str(t.text.trim()).map_err(|err| {
+            if json_text_blocks != 1 || other_blocks != 0 {
+                return Err(ApplyError::invalid_response(
+                    format!(
+                        "Expected exactly 1 JSON text block after ignoring thinking blocks, got {json_text_blocks} JSON text blocks and {other_blocks} other blocks"
+                    ),
+                    "The LLM should return JSON text when OutputFormatJsonSchema is selected",
+                ));
+            }
+            let ir = serde_json::from_str(text).map_err(|err| {
                 ApplyError::invalid_response(
                     format!("Could not parse JSON response: {err}"),
                     "Check that the model response is valid JSON for the configured schema",
@@ -454,6 +506,20 @@ fn extract_ir(
             })
         }
     }
+}
+
+fn normalize_reported_rule_numbers(
+    report: &mut Report,
+    ir: &mut serde_json::Value,
+    empirically_matched: &[usize],
+) {
+    if let Some(object) = ir.as_object_mut() {
+        object.insert(
+            "__rule_numbers__".to_string(),
+            serde_json::json!(empirically_matched),
+        );
+    }
+    report.ir = Some(ir.clone());
 }
 
 fn configure_structured_output(
@@ -476,7 +542,7 @@ fn configure_structured_output(
     } else {
         req.tool_choice = None;
         req.tools = None;
-        req.output_format = Some(OutputFormat::json_schema(report.schema()));
+        set_json_schema_output(req, report.schema());
     }
 }
 
@@ -490,11 +556,20 @@ fn clear_output_format_config(req: &mut MessageCreateParams) {
     }
 }
 
+fn set_json_schema_output(req: &mut MessageCreateParams, schema: serde_json::Value) {
+    if let Some(output_config) = &mut req.output_config {
+        req.output_format = None;
+        output_config.format = Some(OutputFormat::json_schema(schema));
+    } else {
+        req.output_format = Some(OutputFormat::json_schema(schema));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{Field, PolicyType};
-    use claudius::SystemPrompt;
+    use claudius::{SystemPrompt, ThinkingBlock, ToolUseBlock};
 
     fn create_test_policy_type() -> PolicyType {
         PolicyType {
@@ -532,7 +607,10 @@ mod tests {
         let manager = Manager::default();
         assert!(manager.is_empty());
         assert_eq!(manager.len(), 0);
-        assert_eq!(manager.inference_config(), InferenceConfig::ToolUse);
+        assert_eq!(
+            manager.inference_config(),
+            InferenceConfig::OutputFormatJsonSchema
+        );
     }
 
     #[test]
@@ -624,8 +702,10 @@ mod tests {
         let (_report, req) = result.unwrap();
         assert!(!req.messages.is_empty());
         assert!(req.system.is_some());
-        assert_eq!(req.tool_choice, Some(ToolChoice::tool("output_json")));
-        assert!(!req.requires_structured_outputs_beta());
+        assert!(req.tool_choice.is_none());
+        assert!(req.tools.is_none());
+        assert!(req.output_format.is_some());
+        assert!(req.requires_structured_outputs_beta());
     }
 
     #[tokio::test]
@@ -713,7 +793,9 @@ mod tests {
         let (report, req) = result.unwrap();
         assert!(!req.messages.is_empty()); // At least one message
         assert!(req.system.is_some());
-        assert!(req.tools.is_some());
+        assert!(req.tool_choice.is_none());
+        assert!(req.tools.is_none());
+        assert!(req.output_format.is_some());
 
         // Verify the schema includes masked fields and special fields
         let schema = report.schema();
@@ -776,7 +858,7 @@ mod tests {
 
         // Verify key parts of the system prompt
         assert!(system_str.contains("Output JSON"));
-        assert!(system_str.contains("if and only if a rule matches"));
+        assert!(system_str.contains("if and only if that rule matches"));
     }
 
     #[test]
@@ -809,5 +891,53 @@ mod tests {
             }
         }
         assert!(found_text, "Request should include the input text");
+    }
+
+    #[test]
+    fn extract_ir_ignores_thinking_blocks_for_tool_use() {
+        let content = vec![
+            ContentBlock::Thinking(ThinkingBlock::new("thinking", "signature")),
+            ContentBlock::ToolUse(ToolUseBlock::new(
+                "tool_123",
+                "output_json",
+                serde_json::json!({"__rule_numbers__": [1]}),
+            )),
+        ];
+
+        let extracted = extract_ir(&content, InferenceConfig::ToolUse).unwrap();
+
+        assert_eq!(extracted.ir, serde_json::json!({"__rule_numbers__": [1]}));
+        match extracted.feedback {
+            FeedbackTarget::Tool { tool_use_id } => assert_eq!(tool_use_id, "tool_123"),
+            FeedbackTarget::Text => panic!("expected tool feedback"),
+        }
+    }
+
+    #[test]
+    fn extract_ir_ignores_thinking_blocks_for_json_schema_output() {
+        let content = vec![
+            ContentBlock::Thinking(ThinkingBlock::new("thinking", "signature")),
+            ContentBlock::Text(TextBlock::new(r#"{"__rule_numbers__":[1]}"#)),
+        ];
+
+        let extracted = extract_ir(&content, InferenceConfig::OutputFormatJsonSchema).unwrap();
+
+        assert_eq!(extracted.ir, serde_json::json!({"__rule_numbers__": [1]}));
+        match extracted.feedback {
+            FeedbackTarget::Text => {}
+            FeedbackTarget::Tool { .. } => panic!("expected text feedback"),
+        }
+    }
+
+    #[test]
+    fn extract_ir_rejects_multiple_json_text_blocks() {
+        let content = vec![
+            ContentBlock::Text(TextBlock::new(r#"{"a":1}"#)),
+            ContentBlock::Text(TextBlock::new(r#"{"b":2}"#)),
+        ];
+
+        let err = extract_ir(&content, InferenceConfig::OutputFormatJsonSchema).unwrap_err();
+
+        assert!(format!("{err:?}").contains("Expected exactly 1 JSON text block"));
     }
 }

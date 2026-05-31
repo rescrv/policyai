@@ -1,7 +1,8 @@
 # Output JSON
 <summary>
-- Output JSON if and only if a rule matches.  Be discerning.
-- If a rule does not match, output the default JSON.
+- Always output one valid JSON object.
+- Output a rule's action fields if and only if that rule matches.  Be discerning.
+- If no rules match, output the default JSON plus "__rule_numbers__": [] and "__justification__".
 - If a field is not required in the JSON, and does not match a rule, then omit it.
 </summary>
 <context>
@@ -12,6 +13,8 @@ You will be provided with a default value, zero or more rules, and user-provide 
 - For each field in the JSON output:
     - Determine the default value and any and all rules that impact the value.
     - Output the value according to the descriptions in the matching rules.
+- Always include "__rule_numbers__" as the sorted list of matching rule indexes.
+- Always include "__justification__" explaining why the listed rules match and why the omitted rules do not.
 </detailed-instructions>
 <conflict-handling>
 Every rule has a different output.  There will be no conflicts.
@@ -27,10 +30,12 @@ Every rule has a different output.  There will be no conflicts.
 </input>
 <output>
 {
-    "3256dda3-bbd1-4d8d-ba29-e6ebe8bb8f42": [],
-    "b22a89fc-8ad6-48e7-8e25-47f3c2929782": [],
-    "0b84dfeb-f93f-4819-8f2a-26659f85023a": [],
-    "e43d3cdf-1f52-4b65-b16f-58fe32d6ca9d": []
+  "__rule_numbers__": [1, 2, 3, 5],
+  "__justification__": "Rules 1, 2, 3, and 5 match the text's enthusiasm about learning to code as a language-like path to digital opportunity. Rule 4 does not match because the text does not discuss history, mathematics, or logic.",
+  "3256dda3-bbd1-4d8d-ba29-e6ebe8bb8f42": [],
+  "b22a89fc-8ad6-48e7-8e25-47f3c2929782": [],
+  "0b84dfeb-f93f-4819-8f2a-26659f85023a": [],
+  "e43d3cdf-1f52-4b65-b16f-58fe32d6ca9d": []
 }
 </output>
 </example>
@@ -40,11 +45,9 @@ Every rule has a different output.  There will be no conflicts.
 </input>
 <output>
 {
-  "__rule_numbers__": [
-    1
-  ],
-  "__justification__": "The text matches rule 1. It contains an enthusiastic social media post (indicated by the exclamation marks and hashtags #AI #TechTalk) about artificial intelligence's current impact (\"it's reshaping our present\") and asks readers about exciting AI advancements they've observed (\"What advancements have you seen that excite you?\"). No other rules match: rule 2 doesn't match because it doesn't discuss AI advancements across multiple sectors; rules 3 and 4 don't match because it doesn't promote learning AI or recommend Python; rule 5 doesn't match because it doesn't discuss quantum computing."
-  "1c5741ca-4431-409d-a044-66d4b0f0f350": "line1\nline2\nindex:175",
+  "__rule_numbers__": [1],
+  "__justification__": "Rule 1 matches because the text enthusiastically says AI is reshaping the present and asks readers what advancements excite them. Rules 2, 3, 4, and 5 do not match.",
+  "1c5741ca-4431-409d-a044-66d4b0f0f350": "line1\nline2\nindex:175"
 }
 </output>
 </example>
@@ -54,13 +57,8 @@ Every rule has a different output.  There will be no conflicts.
 </input>
 <output>
 {
-  "__rule_numbers__": [1],
-  "__justification__": "The text does not match any of the rules. Rule 1 requires discussion of machine learning advancements and computers replicating human decision-making, but the text only makes a general statement about AI being a revolution. Rule 2 requires advocacy for inclusive and beneficial AI through collaboration, which is not present. Rule 3 requires enthusiasm about quantum computing for AI and asking readers about their excitement, but the text doesn't mention quantum computing. Rule 4 requires explanation of computer science's foundational role with technical components like algorithms and data structures, which are not discussed. Rule 5 requires discussion of human-AI collaboration in the workplace and encouragement to adapt to change, which is not present. The text is simply a general statement about AI being transformative. Therefore, the default JSON should be output.",
-  "da4b64fd-c521-490e-aeb9-1b414d9399f0": true,
-  "5da1e557-2c50-4d7a-841e-7c26173f4d31": false,
-  "9dbe9e51-bd77-4d43-9763-d220825e37fd": false,
-  "6309ece7-2866-41b1-baa3-ebca0063d890": false,
-  "23dd33f3-65e4-4a7b-928a-506636ca0171": false
+  "__rule_numbers__": [],
+  "__justification__": "No rules match. The text is a broad statement about AI being transformative; it does not discuss machine learning decision-making, inclusive AI collaboration, quantum computing, computer science foundations, or human-AI workplace collaboration."
 }
 </output>
 </example>

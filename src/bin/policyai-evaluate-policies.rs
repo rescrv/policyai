@@ -5,8 +5,8 @@ use std::time::Instant;
 use arrrg::CommandLine;
 use claudius::{
     push_or_merge_message, Anthropic, ContentBlock, Effort, JsonSchema, MessageCreateParams,
-    MessageParam, MessageRole, Metadata, Model, SystemPrompt, TextBlock, ThinkingConfig,
-    ToolChoice,
+    MessageParam, MessageRole, Metadata, Model, OutputFormat, SystemPrompt, TextBlock,
+    ThinkingConfig,
 };
 
 use policyai::data::{EffortArg, EvaluationReport, Metrics, TestDataPoint, ThinkingArg};
@@ -99,16 +99,7 @@ pub async fn naive_apply(
     schema["type"] = "object".into();
     schema["required"] = serde_json::Value::Array(vec![]);
     schema["properties"] = properties;
-    req.tool_choice = Some(ToolChoice::tool("output_json"));
-    req.tools = Some(vec![claudius::ToolUnionParam::CustomTool(
-        claudius::ToolParam {
-            name: "output_json".to_string(),
-            description: Some("output JSON according to policy".to_string()),
-            input_schema: schema,
-            cache_control: None,
-            strict: None,
-        },
-    )]);
+    configure_baseline_structured_output(&mut req, schema);
     let start_time = Instant::now();
     let resp = client.send(req).await?;
 
@@ -120,22 +111,56 @@ pub async fn naive_apply(
         u.set_wall_clock_time(start_time.elapsed());
     }
 
-    if resp.content.len() != 1 {
+    extract_baseline_response(&resp.content)
+}
+
+fn configure_baseline_structured_output(req: &mut MessageCreateParams, schema: serde_json::Value) {
+    req.tool_choice = None;
+    req.tools = None;
+    if let Some(output_config) = &mut req.output_config {
+        req.output_format = None;
+        output_config.format = Some(OutputFormat::json_schema(schema));
+    } else {
+        req.output_format = Some(OutputFormat::json_schema(schema));
+    }
+}
+
+fn extract_baseline_response(content: &[ContentBlock]) -> Result<serde_json::Value, ApplyError> {
+    let mut json_text_blocks = 0;
+    let mut other_blocks = 0;
+    let mut text = None;
+    for block in content {
+        match block {
+            ContentBlock::Thinking(_) | ContentBlock::RedactedThinking(_) => {}
+            ContentBlock::Text(t) if !t.text.trim().is_empty() => {
+                json_text_blocks += 1;
+                text = Some(t.text.trim());
+            }
+            _ => other_blocks += 1,
+        }
+    }
+    let Some(text) = text else {
         return Err(ApplyError::invalid_response(
             format!(
-                "Expected exactly 1 content block, got {}",
-                resp.content.len()
+                "Expected exactly 1 JSON text block after ignoring thinking blocks, got {json_text_blocks} JSON text blocks and {other_blocks} other blocks"
             ),
-            "The baseline evaluator expects the model to call the output_json tool once",
-        ));
-    }
-    let ContentBlock::ToolUse(t) = &resp.content[0] else {
-        return Err(ApplyError::invalid_response(
-            "Expected ToolUse content block",
-            "The baseline evaluator expects the model to use the output_json tool",
+            "The baseline evaluator expects JSON schema text output",
         ));
     };
-    Ok(t.input.clone())
+    if json_text_blocks != 1 || other_blocks != 0 {
+        return Err(ApplyError::invalid_response(
+            format!(
+                "Expected exactly 1 JSON text block after ignoring thinking blocks, got {json_text_blocks} JSON text blocks and {other_blocks} other blocks"
+            ),
+            "The baseline evaluator expects JSON schema text output",
+        ));
+    }
+    serde_json::from_str(text).map_err(|err| {
+        ApplyError::invalid_response(
+            format!("Could not parse baseline JSON response: {err}"),
+            "Check that the baseline model response is valid JSON for the configured schema",
+        )
+    })
 }
 
 fn values_match(expected: &serde_json::Value, actual: &serde_json::Value) -> bool {
@@ -426,6 +451,31 @@ impl From<CliOptions> for RuntimeOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use claudius::ThinkingBlock;
+
+    #[test]
+    fn baseline_response_ignores_thinking_blocks() {
+        let content = vec![
+            ContentBlock::Thinking(ThinkingBlock::new("thinking", "signature")),
+            ContentBlock::Text(TextBlock::new(r#"{"field":"value"}"#)),
+        ];
+
+        let extracted = extract_baseline_response(&content).unwrap();
+
+        assert_eq!(extracted, serde_json::json!({"field": "value"}));
+    }
+
+    #[test]
+    fn baseline_response_rejects_multiple_json_text_blocks() {
+        let content = vec![
+            ContentBlock::Text(TextBlock::new(r#"{"a":1}"#)),
+            ContentBlock::Text(TextBlock::new(r#"{"b":2}"#)),
+        ];
+
+        let err = extract_baseline_response(&content).unwrap_err();
+
+        assert!(format!("{err:?}").contains("Expected exactly 1 JSON text block"));
+    }
 
     #[test]
     fn evaluation_report_minimal() {
