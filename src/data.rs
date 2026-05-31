@@ -175,6 +175,7 @@ pub struct SemanticInjection {
 /// # Ok(())
 /// # }
 /// ```
+#[allow(clippy::too_many_arguments)]
 pub async fn policy_applies(
     client: &Anthropic,
     text: &str,
@@ -250,6 +251,7 @@ pub async fn policy_applies(
 /// # Ok(())
 /// # }
 /// ```
+#[allow(clippy::too_many_arguments)]
 pub async fn policy_does_not_apply(
     client: &Anthropic,
     text: &str,
@@ -276,6 +278,7 @@ pub async fn policy_does_not_apply(
         <= n.saturating_sub(k))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn apply_policy_fractional(
     client: &Anthropic,
     text: &str,
@@ -345,11 +348,8 @@ Output just this one-word answer
             betas: None,
         };
         let resp = client.send(req).await?;
-        match policy_applies_answer(resp.stop_sequence.as_deref(), &resp.content)? {
-            true => {
-                success += 1;
-            }
-            false => {}
+        if policy_applies_answer(resp.stop_sequence.as_deref(), &resp.content)? {
+            success += 1;
         }
     }
     Ok(success)
