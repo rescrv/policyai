@@ -51,6 +51,7 @@ pub mod compiler;
 mod errors;
 mod field;
 mod manager;
+mod mask_names;
 mod masks;
 mod on_conflict;
 mod parser;

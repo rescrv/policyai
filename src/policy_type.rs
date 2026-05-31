@@ -2,9 +2,8 @@ use claudius::{
     Anthropic, ContentBlock, Effort, JsonSchema, MessageCreateParams, MessageParam, MessageRole,
     Model, OutputConfig, ThinkingConfig, ToolChoice,
 };
-use uuid::Uuid;
 
-use crate::{parser, Field, ParseError, Policy};
+use crate::{mask_names::MaskNameGenerator, parser, Field, ParseError, Policy};
 
 /// Represents a policy type definition with a name and a set of typed fields.
 ///
@@ -70,54 +69,7 @@ impl PolicyType {
         model: Model,
     ) -> Result<Policy, claudius::Error> {
         let mut schema = serde_json::json! {{}};
-        let mut action_masks = Vec::new();
-        for field in self.fields.iter() {
-            let field_mask = Uuid::new_v4().to_string();
-            let (name, field_schema, enum_values) = match field {
-                Field::Bool {
-                    name,
-                    default: _,
-                    on_conflict: _,
-                } => (name.clone(), bool::json_schema(), Vec::new()),
-                Field::Number {
-                    name,
-                    default: _,
-                    on_conflict: _,
-                } => (name.clone(), f64::json_schema(), Vec::new()),
-                Field::String {
-                    name,
-                    default: _,
-                    on_conflict: _,
-                } => (name.clone(), String::json_schema(), Vec::new()),
-                Field::StringEnum {
-                    name,
-                    values,
-                    default: _,
-                    on_conflict: _,
-                } => {
-                    let enum_values = values
-                        .iter()
-                        .map(|value| (value.clone(), Uuid::new_v4().to_string()))
-                        .collect::<Vec<_>>();
-                    let mut schema = String::json_schema();
-                    schema["enum"] = enum_values
-                        .iter()
-                        .map(|(_, mask)| mask.clone())
-                        .collect::<Vec<_>>()
-                        .into();
-                    (name.clone(), schema, enum_values)
-                }
-                Field::StringArray { name } => {
-                    (name.clone(), Vec::<String>::json_schema(), Vec::new())
-                }
-            };
-            action_masks.push(SemanticActionMask {
-                name,
-                mask: field_mask,
-                enum_values,
-                schema: field_schema,
-            });
-        }
+        let action_masks = self.semantic_action_masks();
         let mut masked_injection = semantic_action_clause(injection).to_string();
         for action_mask in &action_masks {
             masked_injection =
@@ -236,6 +188,59 @@ impl PolicyType {
         })
     }
 
+    fn semantic_action_masks(&self) -> Vec<SemanticActionMask> {
+        let mut mask_names = MaskNameGenerator::new();
+        let mut action_masks = Vec::new();
+        for field in self.fields.iter() {
+            let field_mask = mask_names.next();
+            let (name, field_schema, enum_values) = match field {
+                Field::Bool {
+                    name,
+                    default: _,
+                    on_conflict: _,
+                } => (name.clone(), bool::json_schema(), Vec::new()),
+                Field::Number {
+                    name,
+                    default: _,
+                    on_conflict: _,
+                } => (name.clone(), f64::json_schema(), Vec::new()),
+                Field::String {
+                    name,
+                    default: _,
+                    on_conflict: _,
+                } => (name.clone(), String::json_schema(), Vec::new()),
+                Field::StringEnum {
+                    name,
+                    values,
+                    default: _,
+                    on_conflict: _,
+                } => {
+                    let enum_values = values
+                        .iter()
+                        .map(|value| (value.clone(), mask_names.next()))
+                        .collect::<Vec<_>>();
+                    let mut schema = String::json_schema();
+                    schema["enum"] = enum_values
+                        .iter()
+                        .map(|(_, mask)| mask.clone())
+                        .collect::<Vec<_>>()
+                        .into();
+                    (name.clone(), schema, enum_values)
+                }
+                Field::StringArray { name } => {
+                    (name.clone(), Vec::<String>::json_schema(), Vec::new())
+                }
+            };
+            action_masks.push(SemanticActionMask {
+                name,
+                mask: field_mask,
+                enum_values,
+                schema: field_schema,
+            });
+        }
+        action_masks
+    }
+
     fn sanitize_semantic_action(
         &self,
         injection: &str,
@@ -262,6 +267,7 @@ impl PolicyType {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
 struct SemanticActionMask {
     name: String,
     mask: String,
@@ -510,6 +516,16 @@ mod tests {
         );
 
         assert_eq!(serde_json::json!({"weight": 1.25}), action);
+    }
+
+    #[test]
+    fn semantic_action_masks_are_deterministic() {
+        let policy_type = create_test_policy_type();
+
+        assert_eq!(
+            policy_type.semantic_action_masks(),
+            policy_type.semantic_action_masks()
+        );
     }
 
     #[test]

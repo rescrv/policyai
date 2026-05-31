@@ -1,9 +1,8 @@
 use claudius::{push_or_merge_message, JsonSchema, MessageParam, MessageRole};
-use uuid::Uuid;
 
 use crate::{
-    ApplyError, BoolMask, Field, NumberMask, Policy, PolicyError, Report, StringArrayMask,
-    StringEnumMask, StringMask,
+    mask_names::MaskNameGenerator, ApplyError, BoolMask, Field, NumberMask, Policy, PolicyError,
+    Report, StringArrayMask, StringEnumMask, StringMask,
 };
 
 /// Builder for constructing Reports from policy definitions.
@@ -21,6 +20,7 @@ pub struct ReportBuilder {
     string_array_masks: Vec<StringArrayMask>,
     string_enum_masks: Vec<StringEnumMask>,
     masks_by_index: Vec<Vec<String>>,
+    mask_names: MaskNameGenerator,
     default_return: serde_json::Value,
     messages: Vec<MessageParam>,
     policy_index: usize,
@@ -71,6 +71,7 @@ impl ReportBuilder {
         // increment policy_index at the end when we "commit".
         self.mask_index += 1;
         let mut content = policy.prompt.clone();
+        let mut mask_names = self.mask_names.clone();
 
         // Collect all changes first before applying them
         let mut new_bool_masks = Vec::new();
@@ -95,7 +96,7 @@ impl ReportBuilder {
                     let serde_json::Value::Bool(_) = value else {
                         return Err(PolicyError::expected_bool(name.clone(), value));
                     };
-                    let mask = Uuid::new_v4().to_string();
+                    let mask = mask_names.next();
                     new_masks.push(mask.clone());
                     new_bool_masks.push(BoolMask::new(
                         self.policy_index,
@@ -118,7 +119,7 @@ impl ReportBuilder {
                         serde_json::Value::Null => None,
                         _ => return Err(PolicyError::expected_number(name.clone(), value)),
                     };
-                    let mask = Uuid::new_v4().to_string();
+                    let mask = mask_names.next();
                     new_masks.push(mask.clone());
                     new_number_masks.push(NumberMask::new(
                         self.policy_index,
@@ -144,7 +145,7 @@ impl ReportBuilder {
                         serde_json::Value::Null => None,
                         _ => return Err(PolicyError::expected_string(name.clone(), value)),
                     };
-                    let mask = Uuid::new_v4().to_string();
+                    let mask = mask_names.next();
                     new_masks.push(mask.clone());
                     new_string_masks.push(StringMask::new(
                         self.policy_index,
@@ -172,7 +173,7 @@ impl ReportBuilder {
                             return Err(PolicyError::expected_string(name.clone(), v));
                         }
                     }
-                    let mask = Uuid::new_v4().to_string();
+                    let mask = mask_names.next();
                     new_masks.push(mask.clone());
                     new_string_array_masks.push(StringArrayMask::new(
                         self.policy_index,
@@ -198,7 +199,7 @@ impl ReportBuilder {
                             Some(found_value.clone())
                         }
                     };
-                    let mask = Uuid::new_v4().to_string();
+                    let mask = mask_names.next();
                     new_masks.push(mask.clone());
                     new_string_enum_masks.push(StringEnumMask::new(
                         self.policy_index,
@@ -240,6 +241,7 @@ impl ReportBuilder {
         self.string_array_masks.extend(new_string_array_masks);
         self.string_enum_masks.extend(new_string_enum_masks);
         self.masks_by_index.push(new_masks);
+        self.mask_names = mask_names;
 
         self.policy_index += 1;
         Ok(())
@@ -367,6 +369,7 @@ impl Default for ReportBuilder {
             string_array_masks: vec![],
             string_enum_masks: vec![],
             masks_by_index: vec![],
+            mask_names: MaskNameGenerator::new(),
             default_return: serde_json::json! {{}},
             messages: vec![],
             policy_index: 1,
@@ -385,6 +388,7 @@ impl Default for ReportBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{OnConflict, PolicyType};
 
     #[test]
     fn schema_rejects_additional_properties() {
@@ -392,5 +396,62 @@ mod tests {
 
         assert_eq!(schema["type"], "object");
         assert_eq!(schema["additionalProperties"], false);
+    }
+
+    fn test_policy(action: serde_json::Value) -> Policy {
+        Policy {
+            r#type: PolicyType {
+                name: "TestPolicy".to_string(),
+                fields: vec![
+                    Field::Bool {
+                        name: "enabled".to_string(),
+                        default: Some(false),
+                        on_conflict: OnConflict::Agreement,
+                    },
+                    Field::Number {
+                        name: "score".to_string(),
+                        default: Some(crate::t64(0.0)),
+                        on_conflict: OnConflict::LargestValue,
+                    },
+                ],
+            },
+            prompt: r#"Set "enabled" and "score"."#.to_string(),
+            action,
+        }
+    }
+
+    #[test]
+    fn schema_masks_are_deterministic_for_same_policy() {
+        let policy = test_policy(serde_json::json!({
+            "enabled": true,
+            "score": 2.5,
+        }));
+        let mut left = ReportBuilder::default();
+        let mut right = ReportBuilder::default();
+
+        left.add_policy(&policy).unwrap();
+        right.add_policy(&policy).unwrap();
+
+        assert_eq!(left.schema(), right.schema());
+    }
+
+    #[test]
+    fn failed_policy_does_not_advance_mask_stream() {
+        let invalid_policy = test_policy(serde_json::json!({
+            "enabled": true,
+            "score": "not a number",
+        }));
+        let valid_policy = test_policy(serde_json::json!({
+            "enabled": true,
+            "score": 2.5,
+        }));
+        let mut retry_builder = ReportBuilder::default();
+        let mut fresh_builder = ReportBuilder::default();
+
+        assert!(retry_builder.add_policy(&invalid_policy).is_err());
+        retry_builder.add_policy(&valid_policy).unwrap();
+        fresh_builder.add_policy(&valid_policy).unwrap();
+
+        assert_eq!(retry_builder.schema(), fresh_builder.schema());
     }
 }
