@@ -5,8 +5,9 @@
 //! and structures for evaluation metrics and test data points.
 
 use claudius::{
-    Anthropic, CacheControlEphemeral, ContentBlock, KnownModel, MessageCreateParams, MessageParam,
-    MessageParamContent, MessageRole, Model, StopReason, SystemPrompt, TextBlock, ThinkingConfig,
+    Anthropic, CacheControlEphemeral, ContentBlock, Effort, KnownModel, MessageCreateParams,
+    MessageParam, MessageParamContent, MessageRole, Model, OutputConfig, StopReason, SystemPrompt,
+    TextBlock, ThinkingConfig,
 };
 
 use crate::{Policy, Report, Usage};
@@ -172,7 +173,8 @@ Output just this one-word answer
         .to_string();
         let req = MessageCreateParams {
             max_tokens: 1030,
-            model: Model::Known(KnownModel::ClaudeSonnet40),
+            model: Model::Known(KnownModel::ClaudeOpus48),
+            cache_control: None,
             system: Some(SystemPrompt::from_blocks(vec![TextBlock {
                 text: system.to_string(),
                 cache_control: Some(CacheControlEphemeral::new()),
@@ -194,14 +196,17 @@ Output just this one-word answer
                 role: MessageRole::User,
             }],
             stop_sequences: Some(vec!["yes".to_string(), "no".to_string()]),
-            thinking: Some(ThinkingConfig::enabled(1024)),
+            thinking: Some(ThinkingConfig::adaptive()),
             stream: false,
             metadata: None,
+            output_config: Some(OutputConfig::new().with_effort(Effort::Medium)),
+            output_format: None,
             temperature: None,
             tools: None,
             tool_choice: None,
             top_p: None,
             top_k: None,
+            betas: None,
         };
         let resp = client.send(req).await?;
         if !matches!(resp.stop_reason, Some(StopReason::StopSequence)) {

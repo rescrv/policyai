@@ -82,8 +82,11 @@ Text:
             let req = claudius::MessageCreateParams {
                 max_tokens: 2048,
                 messages: vec![prompt.into()],
-                model: Model::Known(KnownModel::ClaudeSonnet40),
+                model: Model::Known(KnownModel::ClaudeOpus48),
+                cache_control: None,
                 metadata: None,
+                output_config: None,
+                output_format: None,
                 stop_sequences: None,
                 system: Some(SystemPrompt::from_blocks(vec![TextBlock {
                     text: system.to_string(),
@@ -97,6 +100,7 @@ Text:
                 top_k: None,
                 top_p: None,
                 stream: false,
+                betas: None,
             };
             let resp = client.send(req).await?;
             let mut injection = String::new();

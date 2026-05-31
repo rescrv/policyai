@@ -8,17 +8,17 @@ license = "Apache-2.0"
 repository = "https://github.com/rescrv/policyai"
 
 [dependencies]
-arrrg = "0.6.0"
-arrrg_derive = "0.6.0"
-claudius = "0.16.0"
-getopts = "0.2.21"
-guacamole = "0.10.0"
-rand = "0.9.0"
-reqwest = "0.12.12"
-rustyline = { version = "15.0.0", features = ["derive"] }
-serde = "1.0.217"
-serde_json = { version = "1.0.135", features = ["preserve_order"] }
-shvar = "0.6.0"
-tokio = { version = "1.43.0", features = ["rt", "macros"] }
-utf8path = "0.9.1"
+arrrg = "0.10.0"
+arrrg_derive = "0.10.0"
+claudius = "0.31.0"
+getopts = "0.2.24"
+guacamole = "0.16.0"
+rand = "0.10.1"
+reqwest = "0.13.4"
+rustyline = { version = "18.0.0", features = ["derive"] }
+serde = "1.0.228"
+serde_json = { version = "1.0.150", features = ["preserve_order"] }
+shvar = "0.10.0"
+tokio = { version = "1.52.3", features = ["rt", "macros"] }
+utf8path = "0.11.0"
 uuid = { version = "1.18.1", features = ["v4"] }
