@@ -485,6 +485,8 @@ pub struct StringEnumMask {
     pub mask: String,
     /// The specific enum value this mask represents
     pub value: Option<String>,
+    /// The declared enum values in increasing order.
+    pub values: Vec<String>,
     /// Default enum value when the field is not present
     pub default: Option<String>,
     /// Strategy for resolving conflicts when multiple policies set different values
@@ -500,6 +502,7 @@ impl StringEnumMask {
     /// * `name` - The original field name from the policy definition
     /// * `mask` - The masked field name unlikely to be in LLM training data
     /// * `value` - The specific enum value this mask represents
+    /// * `values` - The allowed enum values in increasing order
     /// * `default` - The default enum value when field is absent
     /// * `on_conflict` - Strategy for resolving conflicts between policies
     ///
@@ -512,6 +515,7 @@ impl StringEnumMask {
     ///     "status".to_string(),
     ///     "field_enum456".to_string(),
     ///     Some("active".to_string()),
+    ///     vec!["inactive".to_string(), "active".to_string()],
     ///     Some("inactive".to_string()),
     ///     OnConflict::LargestValue
     /// );
@@ -521,6 +525,7 @@ impl StringEnumMask {
         name: String,
         mask: String,
         value: Option<String>,
+        values: Vec<String>,
         default: Option<String>,
         on_conflict: OnConflict,
     ) -> Self {
@@ -529,6 +534,7 @@ impl StringEnumMask {
             name,
             mask,
             value,
+            values,
             default,
             on_conflict,
         }
@@ -550,7 +556,7 @@ impl StringEnumMask {
     /// ```
     /// # use policyai::{StringEnumMask, OnConflict, Report};
     /// # use claudius::MessageParam;
-    /// let mask = StringEnumMask::new(1, "priority".to_string(), "field_enum".to_string(), Some("high".to_string()), None, OnConflict::Default);
+    /// let mask = StringEnumMask::new(1, "priority".to_string(), "field_enum".to_string(), Some("high".to_string()), vec!["low".to_string(), "high".to_string()], None, OnConflict::Default);
     /// let ir = serde_json::json!({"field_enum": true});
     /// let mut report = Report::new(vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
     /// mask.apply_to(&ir, &mut report);
@@ -564,6 +570,7 @@ impl StringEnumMask {
                             self.policy_index,
                             &self.name,
                             enum_value.clone(),
+                            &self.values,
                             self.on_conflict,
                         );
                     } else {

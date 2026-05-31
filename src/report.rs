@@ -7,6 +7,12 @@ use crate::{
     StringArrayMask, StringEnumMask, StringMask,
 };
 
+fn enum_value_is_greater(existing: &str, new: &str, values: &[String]) -> bool {
+    let existing_index = values.iter().position(|value| value == existing);
+    let new_index = values.iter().position(|value| value == new);
+    matches!((existing_index, new_index), (Some(existing), Some(new)) if new > existing)
+}
+
 /// Statistics for a single field in a report.
 ///
 /// Tracks how many times a field was set and the distribution of values
@@ -457,9 +463,6 @@ impl Report {
                             OnConflict::LargestValue => {
                                 if number_less_than(existing, &value) {
                                     *existing = value;
-                                } else {
-                                    conflict_to_report =
-                                        Some((field.to_string(), existing.clone(), value.clone()));
                                 }
                             }
                         }
@@ -629,13 +632,15 @@ impl Report {
     /// # use policyai::{Report, OnConflict};
     /// # use claudius::MessageParam;
     /// let mut report = Report::new(vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
-    /// report.report_string_enum(1, "status", "active".to_string(), OnConflict::LargestValue);
+    /// let values = vec!["inactive".to_string(), "active".to_string()];
+    /// report.report_string_enum(1, "status", "active".to_string(), &values, OnConflict::LargestValue);
     /// ```
     pub fn report_string_enum(
         &mut self,
         policy_index: usize,
         field: &str,
         value: String,
+        values: &[String],
         on_conflict: OnConflict,
     ) {
         self.report_policy_index(policy_index);
@@ -658,11 +663,8 @@ impl Report {
                                 self.report_string_conflict(field, s, value);
                             }
                             OnConflict::LargestValue => {
-                                if value.len() > s.len() {
+                                if enum_value_is_greater(s, &value, values) {
                                     *v = value.into();
-                                } else {
-                                    let s = s.clone();
-                                    self.report_string_conflict(field, s, value);
                                 }
                             }
                         }
@@ -1038,9 +1040,28 @@ mod tests {
     #[test]
     fn report_tracks_string_enum_stats() {
         let mut report = Report::new(vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
-        report.report_string_enum(1, "priority", "high".to_string(), OnConflict::Default);
-        report.report_string_enum(2, "priority", "low".to_string(), OnConflict::Default);
-        report.report_string_enum(3, "priority", "high".to_string(), OnConflict::Default);
+        let values = vec!["low".to_string(), "medium".to_string(), "high".to_string()];
+        report.report_string_enum(
+            1,
+            "priority",
+            "high".to_string(),
+            &values,
+            OnConflict::Default,
+        );
+        report.report_string_enum(
+            2,
+            "priority",
+            "low".to_string(),
+            &values,
+            OnConflict::Default,
+        );
+        report.report_string_enum(
+            3,
+            "priority",
+            "high".to_string(),
+            &values,
+            OnConflict::Default,
+        );
 
         let stats = report
             .field_stats("priority")
@@ -1071,6 +1092,47 @@ mod tests {
             "report_tracks_string_array_stats: count={}, distribution={:?}",
             stats.count, stats.distribution
         );
+    }
+
+    #[test]
+    fn report_number_largest_value_keeps_largest_without_conflict() {
+        let mut report = Report::new(vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
+        report.report_number(1, "score", 10, OnConflict::LargestValue);
+        report.report_number(2, "score", 20, OnConflict::LargestValue);
+        report.report_number(3, "score", 5, OnConflict::LargestValue);
+
+        assert_eq!(serde_json::json!({"score": 20}), report.value());
+        assert!(report.conflicts().is_empty());
+    }
+
+    #[test]
+    fn report_string_enum_largest_value_uses_declared_order() {
+        let mut report = Report::new(vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
+        let values = vec!["low".to_string(), "medium".to_string(), "high".to_string()];
+        report.report_string_enum(
+            1,
+            "priority",
+            "medium".to_string(),
+            &values,
+            OnConflict::LargestValue,
+        );
+        report.report_string_enum(
+            2,
+            "priority",
+            "high".to_string(),
+            &values,
+            OnConflict::LargestValue,
+        );
+        report.report_string_enum(
+            3,
+            "priority",
+            "medium".to_string(),
+            &values,
+            OnConflict::LargestValue,
+        );
+
+        assert_eq!(serde_json::json!({"priority": "high"}), report.value());
+        assert!(report.conflicts().is_empty());
     }
 
     #[test]

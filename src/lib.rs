@@ -155,6 +155,14 @@ mod tests {
 
     use super::*;
 
+    fn live_anthropic_client() -> Option<Anthropic> {
+        if std::env::var_os("POLICYAI_LIVE_TESTS").is_none() {
+            eprintln!("skipping live Anthropic test; set POLICYAI_LIVE_TESTS=1 to run it");
+            return None;
+        }
+        Some(Anthropic::new(None).expect("could not create Anthropic client"))
+    }
+
     #[test]
     fn t64_equality() {
         assert_eq!(t64(1.0), t64(1.0));
@@ -285,7 +293,9 @@ mod tests {
 
     #[tokio::test]
     async fn with_semantic_injection() {
-        let client = Anthropic::new(None).unwrap();
+        let Some(client) = live_anthropic_client() else {
+            return;
+        };
         let policy = PolicyType {
             name: "policyai::EmailPolicy".to_string(),
             fields: vec![
@@ -338,7 +348,9 @@ mod tests {
 
     #[tokio::test]
     async fn numeric_semantic_injection() {
-        let client = Anthropic::new(None).unwrap();
+        let Some(client) = live_anthropic_client() else {
+            return;
+        };
         let policy = PolicyType {
             name: "policyai::EmailPolicy".to_string(),
             fields: vec![Field::Number {
@@ -359,7 +371,9 @@ mod tests {
 
     #[tokio::test]
     async fn apply_readme_policy() {
-        let client = Anthropic::new(None).unwrap();
+        let Some(client) = live_anthropic_client() else {
+            return;
+        };
         let policy = PolicyType {
             name: "policyai::EmailPolicy".to_string(),
             fields: vec![
@@ -407,10 +421,10 @@ mod tests {
             policy.action
         );
         let mut manager = Manager::default();
-        manager.add(policy);
+        manager.add(policy).unwrap();
         let report = manager
             .apply(
-                &Anthropic::new(None).unwrap(),
+                &client,
                 MessageCreateParams {
                     max_tokens: 2048,
                     model: DEFAULT_MODEL,

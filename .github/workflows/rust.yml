@@ -2,8 +2,7 @@ name: ci
 on:
   push:
     branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
+  workflow_dispatch:
 env:
   CARGO_TERM_COLOR: always
 jobs:
@@ -25,3 +24,4 @@ jobs:
       run: cargo test
       env:
         CLAUDIUS_API_KEY: ${{ secrets.CLAUDIUS_API_KEY }}
+        POLICYAI_LIVE_TESTS: "1"
