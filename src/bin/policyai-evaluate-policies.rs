@@ -272,7 +272,7 @@ async fn main() {
             let mut manager = Manager::default();
             let mut manager_error = None;
             for policy in point.policies.iter() {
-                if let Err(err) = manager.add(policy.clone()) {
+                if let Err(err) = manager.try_add(policy.clone()) {
                     manager_error = Some(err);
                     break;
                 }

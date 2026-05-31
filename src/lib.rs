@@ -424,7 +424,7 @@ mod tests {
             policy.action
         );
         let mut manager = Manager::default();
-        manager.add(policy).unwrap();
+        manager.add(policy);
         let report = manager
             .apply(
                 &client,

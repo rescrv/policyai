@@ -4,11 +4,18 @@
 //! processing, including policy validation errors, conflict resolution failures,
 //! and LLM communication issues.
 
-use crate::Field;
+use crate::{Field, PolicyType};
 
 /// Errors that can occur when working with policies
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub enum PolicyError {
+    /// A policy uses a different type than the manager's existing policies.
+    PolicyTypeMismatch {
+        /// The policy type already managed.
+        expected: Box<PolicyType>,
+        /// The policy type from the policy being added.
+        actual: Box<PolicyType>,
+    },
     /// Field configuration is inconsistent with policy requirements
     Inconsistent {
         /// The field that has an inconsistent configuration.
@@ -67,13 +74,6 @@ pub enum PolicyError {
         expected: String,
         /// The actual type that was found.
         actual: String,
-    },
-    /// A manager was asked to compose policies with different policy types.
-    PolicyTypeMismatch {
-        /// The policy type already managed.
-        expected: String,
-        /// The policy type supplied by the new policy.
-        found: String,
     },
 }
 
@@ -136,6 +136,13 @@ impl PolicyError {
 impl std::fmt::Display for PolicyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            PolicyError::PolicyTypeMismatch { expected, actual } => {
+                write!(
+                    f,
+                    "Policy type mismatch: expected '{}' but got '{}'\nSuggestion: Add only policies with the same type to a manager",
+                    expected.name, actual.name
+                )
+            }
             PolicyError::Inconsistent { field } => {
                 write!(f, "Inconsistent field configuration: {field}\nSuggestion: Check that the field type and conflict resolution strategy are compatible")
             }
@@ -183,12 +190,6 @@ impl std::fmt::Display for PolicyError {
                 actual,
             } => {
                 write!(f, "Type check failure at {file}:{line}: {message}\n  Expected: {expected}\n  Actual: {actual}\nSuggestion: Verify that your policy actions match the policy type definition")
-            }
-            PolicyError::PolicyTypeMismatch { expected, found } => {
-                write!(
-                    f,
-                    "Policy type mismatch:\n  Expected: {expected}\n  Found: {found}\nSuggestion: Only compose policies created from the same PolicyType"
-                )
             }
         }
     }

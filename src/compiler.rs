@@ -199,7 +199,7 @@ impl CompiledPolicySet {
     #[allow(clippy::result_large_err)]
     pub fn extend_manager(&self, manager: &mut Manager) -> Result<(), PolicyError> {
         for policy in self.policies() {
-            manager.add(policy)?;
+            manager.try_add(policy)?;
         }
         Ok(())
     }
@@ -210,9 +210,7 @@ impl CompiledPolicySet {
     pub fn into_manager(self) -> Manager {
         let mut manager = Manager::default();
         for policy in self.into_policies() {
-            manager
-                .add(policy)
-                .expect("compiled policies always share one policy type");
+            manager.add(policy);
         }
         manager
     }
