@@ -205,6 +205,7 @@ impl ReportBuilder {
                         name.clone(),
                         mask.clone(),
                         enum_value.clone(),
+                        values.clone(),
                         default.clone(),
                         *on_conflict,
                     ));

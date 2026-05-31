@@ -51,7 +51,7 @@ impl InferenceConfig {
 /// #     prompt: "Test policy".to_string(),
 /// #     action: serde_json::json!({}),
 /// # };
-/// manager.add(policy);
+/// manager.add(policy)?;
 ///
 /// # let template = MessageCreateParams {
 /// #     max_tokens: 1024,
@@ -97,14 +97,22 @@ impl Manager {
 
     /// Add a policy to the manager.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the policy type doesn't match existing policies in the manager.
-    pub fn add(&mut self, policy: Policy) {
+    /// Returns [`PolicyError::PolicyTypeMismatch`] if the policy type does not
+    /// match the policies already in the manager.
+    #[allow(clippy::result_large_err)]
+    pub fn add(&mut self, policy: Policy) -> Result<(), crate::PolicyError> {
         if let Some(last) = self.policies.last() {
-            assert_eq!(last.r#type, policy.r#type);
+            if last.r#type != policy.r#type {
+                return Err(crate::PolicyError::PolicyTypeMismatch {
+                    expected: last.r#type.to_string(),
+                    found: policy.r#type.to_string(),
+                });
+            }
         }
         self.policies.push(policy);
+        Ok(())
     }
 
     /// Get the number of policies managed.
@@ -391,6 +399,7 @@ enum FeedbackTarget {
     Text,
 }
 
+#[allow(clippy::result_large_err)]
 fn extract_ir(
     content: &[ContentBlock],
     inference_config: InferenceConfig,
@@ -538,7 +547,7 @@ mod tests {
             serde_json::json!({"is_active": true}),
         );
 
-        manager.add(policy);
+        manager.add(policy).unwrap();
         assert!(!manager.is_empty());
         assert_eq!(manager.len(), 1);
     }
@@ -564,16 +573,15 @@ mod tests {
             serde_json::json!({"count": 42}),
         );
 
-        manager.add(policy1);
-        manager.add(policy2);
-        manager.add(policy3);
+        manager.add(policy1).unwrap();
+        manager.add(policy2).unwrap();
+        manager.add(policy3).unwrap();
 
         assert_eq!(manager.len(), 3);
     }
 
     #[test]
-    #[should_panic]
-    fn manager_add_policy_different_type_panics() {
+    fn manager_add_policy_different_type_returns_error() {
         let mut manager = Manager::default();
 
         let type1 = create_test_policy_type();
@@ -589,8 +597,9 @@ mod tests {
         let policy1 = create_test_policy(type1, "first", serde_json::json!({"is_active": true}));
         let policy2 = create_test_policy(type2, "second", serde_json::json!({"enabled": false}));
 
-        manager.add(policy1);
-        manager.add(policy2); // This should panic
+        manager.add(policy1).unwrap();
+        let err = manager.add(policy2).unwrap_err();
+        assert!(matches!(err, crate::PolicyError::PolicyTypeMismatch { .. }));
     }
 
     #[tokio::test]
@@ -682,8 +691,8 @@ mod tests {
             serde_json::json!({"message": "greeting"}),
         );
 
-        manager.add(policy1);
-        manager.add(policy2);
+        manager.add(policy1).unwrap();
+        manager.add(policy2).unwrap();
 
         let template = MessageCreateParams::default();
         let text = "urgent hello world";
@@ -692,7 +701,6 @@ mod tests {
         assert!(result.is_ok());
 
         let (report, req) = result.unwrap();
-        println!("Number of messages: {}", req.messages.len()); // Debug output
         assert!(!req.messages.is_empty()); // At least one message
         assert!(req.system.is_some());
         assert!(req.tools.is_some());

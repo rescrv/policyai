@@ -68,6 +68,13 @@ pub enum PolicyError {
         /// The actual type that was found.
         actual: String,
     },
+    /// A manager was asked to compose policies with different policy types.
+    PolicyTypeMismatch {
+        /// The policy type already managed.
+        expected: String,
+        /// The policy type supplied by the new policy.
+        found: String,
+    },
 }
 
 impl PolicyError {
@@ -176,6 +183,12 @@ impl std::fmt::Display for PolicyError {
                 actual,
             } => {
                 write!(f, "Type check failure at {file}:{line}: {message}\n  Expected: {expected}\n  Actual: {actual}\nSuggestion: Verify that your policy actions match the policy type definition")
+            }
+            PolicyError::PolicyTypeMismatch { expected, found } => {
+                write!(
+                    f,
+                    "Policy type mismatch:\n  Expected: {expected}\n  Found: {found}\nSuggestion: Only compose policies created from the same PolicyType"
+                )
             }
         }
     }

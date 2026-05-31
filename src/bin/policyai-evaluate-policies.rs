@@ -119,10 +119,19 @@ pub async fn naive_apply(
     }
 
     if resp.content.len() != 1 {
-        todo!();
+        return Err(ApplyError::invalid_response(
+            format!(
+                "Expected exactly 1 content block, got {}",
+                resp.content.len()
+            ),
+            "The baseline evaluator expects the model to call the output_json tool once",
+        ));
     }
     let ContentBlock::ToolUse(t) = &resp.content[0] else {
-        todo!();
+        return Err(ApplyError::invalid_response(
+            "Expected ToolUse content block",
+            "The baseline evaluator expects the model to use the output_json tool",
+        ));
     };
     Ok(t.input.clone())
 }
@@ -261,8 +270,12 @@ async fn main() {
                 }
             };
             let mut manager = Manager::default();
+            let mut manager_error = None;
             for policy in point.policies.iter() {
-                manager.add(policy.clone());
+                if let Err(err) = manager.add(policy.clone()) {
+                    manager_error = Some(err);
+                    break;
+                }
             }
             let expected = build_expected_with_defaults(&point.policies, point.expected.as_ref());
             let mut metrics = Metrics::default();
@@ -305,24 +318,30 @@ async fn main() {
             // Run policyai
             let mut policyai_usage = Some(Usage::new());
             let start = Instant::now();
-            let report = match manager
-                .apply(
-                    &client,
-                    MessageCreateParams {
-                        max_tokens: 4096,
-                        model: model.clone(),
-                        ..Default::default()
-                    },
-                    &point.text,
-                    policyai_usage.as_mut(),
-                )
-                .await
-            {
-                Ok(returned) => returned,
-                Err(err) => {
-                    metrics.policyai_error = Some(format!("{err:?}"));
-                    metrics.policyai_apply_duration_ms = start.elapsed().as_millis() as u32;
-                    Report::default()
+            let report = if let Some(err) = manager_error {
+                metrics.policyai_error = Some(format!("{err:?}"));
+                metrics.policyai_apply_duration_ms = start.elapsed().as_millis() as u32;
+                Report::default()
+            } else {
+                match manager
+                    .apply(
+                        &client,
+                        MessageCreateParams {
+                            max_tokens: 4096,
+                            model: model.clone(),
+                            ..Default::default()
+                        },
+                        &point.text,
+                        policyai_usage.as_mut(),
+                    )
+                    .await
+                {
+                    Ok(returned) => returned,
+                    Err(err) => {
+                        metrics.policyai_error = Some(format!("{err:?}"));
+                        metrics.policyai_apply_duration_ms = start.elapsed().as_millis() as u32;
+                        Report::default()
+                    }
                 }
             };
             metrics.policyai_apply_duration_ms = start.elapsed().as_millis() as u32;

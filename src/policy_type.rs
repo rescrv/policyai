@@ -1,6 +1,6 @@
 use claudius::{
     Anthropic, ContentBlock, JsonSchema, MessageCreateParams, MessageParam, MessageRole, Model,
-    OutputFormat,
+    ToolChoice,
 };
 use uuid::Uuid;
 
@@ -73,7 +73,7 @@ impl PolicyType {
         let mut action_masks = Vec::new();
         for field in self.fields.iter() {
             let field_mask = Uuid::new_v4().to_string();
-            let (name, schema, enum_values) = match field {
+            let (name, field_schema, enum_values) = match field {
                 Field::Bool {
                     name,
                     default: _,
@@ -115,7 +115,7 @@ impl PolicyType {
                 name,
                 mask: field_mask,
                 enum_values,
-                schema,
+                schema: field_schema,
             });
         }
         let mut masked_injection = semantic_action_clause(injection).to_string();
@@ -133,7 +133,7 @@ impl PolicyType {
         let mut properties = serde_json::json! {{}};
         let mut required = Vec::new();
         for action_mask in &action_masks {
-            if masked_injection.contains(&action_mask.mask) {
+            if self.fields.len() == 1 || masked_injection.contains(&action_mask.mask) {
                 properties[&action_mask.mask] = action_mask.schema.clone();
                 required.push(action_mask.mask.clone());
             }
@@ -155,11 +155,19 @@ impl PolicyType {
             thinking: None,
             metadata: None,
             output_config: None,
-            output_format: Some(OutputFormat::json_schema(schema)),
+            output_format: None,
             stop_sequences: None,
             temperature: None,
-            tool_choice: None,
-            tools: None,
+            tool_choice: Some(ToolChoice::tool("output_json")),
+            tools: Some(vec![claudius::ToolUnionParam::CustomTool(
+                claudius::ToolParam {
+                    name: "output_json".to_string(),
+                    description: Some("output JSON according to the requested policy type".into()),
+                    input_schema: schema,
+                    cache_control: None,
+                    strict: Some(true),
+                },
+            )]),
             top_k: None,
             top_p: None,
             stream: false,
@@ -173,6 +181,22 @@ impl PolicyType {
         }
         let resp = client.send(req).await?;
         let prompt = injection.to_string();
+        if let Some(tool) = resp.content.iter().find_map(|content| {
+            if let ContentBlock::ToolUse(tool) = content {
+                Some(tool)
+            } else {
+                None
+            }
+        }) {
+            let mut action = tool.input.clone();
+            unmask_semantic_action(&action_masks, &mut action);
+            return Ok(Policy {
+                r#type: self.clone(),
+                prompt,
+                action: self.sanitize_semantic_action(injection, action),
+            });
+        }
+
         let raw_response = resp
             .content
             .iter()
@@ -204,7 +228,7 @@ impl PolicyType {
 
         let mut action = serde_json::from_str(json_content)?;
         unmask_semantic_action(&action_masks, &mut action);
-        self.sanitize_semantic_action(&mut action);
+        let action = self.sanitize_semantic_action(injection, action);
         Ok(Policy {
             r#type: self.clone(),
             prompt,
@@ -212,16 +236,29 @@ impl PolicyType {
         })
     }
 
-    fn sanitize_semantic_action(&self, action: &mut serde_json::Value) {
-        let serde_json::Value::Object(action) = action else {
-            return;
+    fn sanitize_semantic_action(
+        &self,
+        injection: &str,
+        action: serde_json::Value,
+    ) -> serde_json::Value {
+        let serde_json::Value::Object(mut action) = action else {
+            return action;
         };
-        action.retain(|name, value| {
-            let Some(field) = self.fields.iter().find(|field| field.name() == name) else {
-                return false;
+        let mut sanitized = serde_json::Map::new();
+        let single_field = self.fields.len() == 1;
+        let action_clause = semantic_action_clause(injection);
+        for field in &self.fields {
+            let Some(mut value) = action.remove(field.name()) else {
+                continue;
             };
-            coerce_action_value(field, value)
-        });
+            if !single_field && !field_is_mentioned(action_clause, field.name()) {
+                continue;
+            }
+            if coerce_action_value(field, &mut value) {
+                sanitized.insert(field.name().to_string(), value);
+            }
+        }
+        serde_json::Value::Object(sanitized)
     }
 }
 
@@ -306,6 +343,27 @@ fn push_replaced_token(
     }
 }
 
+fn field_is_mentioned(input: &str, field_name: &str) -> bool {
+    contains_word_case_insensitive(input, field_name)
+        || field_name
+            .strip_suffix('s')
+            .is_some_and(|singular| contains_word_case_insensitive(input, singular))
+}
+
+fn contains_word_case_insensitive(input: &str, needle: &str) -> bool {
+    let input = input.to_lowercase();
+    let needle = needle.to_lowercase();
+    input.match_indices(&needle).any(|(index, _)| {
+        let before = input[..index].chars().next_back();
+        let after = input[index + needle.len()..].chars().next();
+        !before.is_some_and(is_identifier_char) && !after.is_some_and(is_identifier_char)
+    })
+}
+
+fn is_identifier_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || ch == '_'
+}
+
 fn coerce_action_value(field: &Field, value: &mut serde_json::Value) -> bool {
     match field {
         Field::Bool { .. } => match value {
@@ -336,9 +394,9 @@ fn coerce_action_value(field: &Field, value: &mut serde_json::Value) -> bool {
         Field::StringEnum { values, .. } => value
             .as_str()
             .is_some_and(|value| values.iter().any(|allowed| allowed == value)),
-        Field::StringArray { .. } => value
-            .as_array()
-            .is_some_and(|values| values.iter().all(serde_json::Value::is_string)),
+        Field::StringArray { .. } => value.as_array().is_some_and(|values| {
+            !values.is_empty() && values.iter().all(serde_json::Value::is_string)
+        }),
     }
 }
 
@@ -387,6 +445,71 @@ mod tests {
                 },
             ],
         }
+    }
+
+    #[test]
+    fn semantic_action_sanitization_keeps_requested_default_value() {
+        let policy_type = PolicyType {
+            name: "EmailPolicy".to_string(),
+            fields: vec![
+                Field::Bool {
+                    name: "unread".to_string(),
+                    default: Some(true),
+                    on_conflict: OnConflict::Default,
+                },
+                Field::StringEnum {
+                    name: "priority".to_string(),
+                    values: vec!["low".to_string(), "medium".to_string(), "high".to_string()],
+                    default: None,
+                    on_conflict: OnConflict::LargestValue,
+                },
+                Field::StringEnum {
+                    name: "category".to_string(),
+                    values: vec![
+                        "ai".to_string(),
+                        "distributed systems".to_string(),
+                        "other".to_string(),
+                    ],
+                    default: Some("other".to_string()),
+                    on_conflict: OnConflict::Agreement,
+                },
+                Field::StringArray {
+                    name: "labels".to_string(),
+                },
+            ],
+        };
+        let action = policy_type.sanitize_semantic_action(
+            "When the email is about AI: Set \"priority\" to \"low\" and \"unread\" to \"true\".",
+            serde_json::json!({
+                "priority": "low",
+                "category": "ai",
+                "labels": [],
+                "unread": true
+            }),
+        );
+
+        assert_eq!(
+            serde_json::json!({"priority": "low", "unread": true}),
+            action
+        );
+    }
+
+    #[test]
+    fn semantic_action_sanitization_keeps_single_field_without_name_mention() {
+        let policy_type = PolicyType {
+            name: "EmailPolicy".to_string(),
+            fields: vec![Field::Number {
+                name: "weight".to_string(),
+                default: None,
+                on_conflict: OnConflict::Default,
+            }],
+        };
+        let action = policy_type.sanitize_semantic_action(
+            "Assign weight to the email.",
+            serde_json::json!({"weight": 1.25}),
+        );
+
+        assert_eq!(serde_json::json!({"weight": 1.25}), action);
     }
 
     #[test]
@@ -617,13 +740,14 @@ mod tests {
     #[test]
     fn sanitize_semantic_action_drops_unknown_fields() {
         let policy_type = create_test_policy_type();
-        let mut action = serde_json::json!({
+        let action = policy_type.sanitize_semantic_action(
+            "Set active to true and priority to high.",
+            serde_json::json!({
             "active": true,
             "priority": "high",
             "extra": "ignored",
-        });
-
-        policy_type.sanitize_semantic_action(&mut action);
+            }),
+        );
 
         assert_eq!(
             serde_json::json!({
@@ -637,14 +761,15 @@ mod tests {
     #[test]
     fn sanitize_semantic_action_coerces_simple_values() {
         let policy_type = create_test_policy_type();
-        let mut action = serde_json::json!({
-            "active": "true",
-            "score": "42.5",
-            "tags": ["example"],
-            "extra": "ignored",
-        });
-
-        policy_type.sanitize_semantic_action(&mut action);
+        let action = policy_type.sanitize_semantic_action(
+            "Set active to true, score to 42.5, and tags to example.",
+            serde_json::json!({
+                "active": "true",
+                "score": "42.5",
+                "tags": ["example"],
+                "extra": "ignored",
+            }),
+        );
 
         assert_eq!(
             serde_json::json!({
