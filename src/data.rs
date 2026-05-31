@@ -172,7 +172,8 @@ Output just this one-word answer
         .to_string();
         let req = MessageCreateParams {
             max_tokens: 1030,
-            model: Model::Known(KnownModel::ClaudeSonnet40),
+            model: Model::Known(KnownModel::ClaudeOpus48),
+            cache_control: None,
             system: Some(SystemPrompt::from_blocks(vec![TextBlock {
                 text: system.to_string(),
                 cache_control: Some(CacheControlEphemeral::new()),
@@ -197,11 +198,14 @@ Output just this one-word answer
             thinking: Some(ThinkingConfig::enabled(1024)),
             stream: false,
             metadata: None,
+            output_config: None,
+            output_format: None,
             temperature: None,
             tools: None,
             tool_choice: None,
             top_p: None,
             top_k: None,
+            betas: None,
         };
         let resp = client.send(req).await?;
         if !matches!(resp.stop_reason, Some(StopReason::StopSequence)) {

@@ -147,7 +147,7 @@ pub(crate) fn number_less_than(lhs: &serde_json::Number, rhs: &serde_json::Numbe
 
 #[cfg(test)]
 mod tests {
-    use claudius::{Anthropic, MessageCreateParams};
+    use claudius::{Anthropic, KnownModel, MessageCreateParams, Model};
 
     use super::*;
 
@@ -407,6 +407,7 @@ mod tests {
                 &Anthropic::new(None).unwrap(),
                 MessageCreateParams {
                     max_tokens: 2048,
+                    model: Model::Known(KnownModel::ClaudeOpus48),
                     ..Default::default()
                 },
                 r#"From: robert@example.org

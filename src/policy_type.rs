@@ -105,7 +105,8 @@ impl PolicyType {
         let system = include_str!("../prompts/generate-semantic-injection.md").to_string();
         let req = MessageCreateParams {
             max_tokens: 2048,
-            model: Model::Known(KnownModel::ClaudeSonnet40),
+            model: Model::Known(KnownModel::ClaudeOpus48),
+            cache_control: None,
             messages: vec![MessageParam::new_with_string(
                 format!("<ask>{injection}</ask>"),
                 MessageRole::User,
@@ -113,6 +114,8 @@ impl PolicyType {
             system: Some(system.into()),
             thinking: Some(ThinkingConfig::enabled(1024)),
             metadata: None,
+            output_config: None,
+            output_format: None,
             stop_sequences: None,
             temperature: None,
             tool_choice: None,
@@ -120,6 +123,7 @@ impl PolicyType {
             top_k: None,
             top_p: None,
             stream: false,
+            betas: None,
         };
         let resp = client.send(req).await?;
         let prompt = injection.to_string();
