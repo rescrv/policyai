@@ -40,9 +40,9 @@ pub enum PolicyError {
         /// Name of the field with conflicting defaults.
         field: String,
         /// The existing default value.
-        existing: serde_json::Value,
+        existing: Box<serde_json::Value>,
         /// The new default value that conflicts.
-        new: serde_json::Value,
+        new: Box<serde_json::Value>,
         /// Suggested resolution for the conflict.
         suggestion: String,
     },
@@ -240,9 +240,9 @@ pub enum Conflict {
         /// Name of the field experiencing the disagreement.
         name: String,
         /// First value from one policy.
-        value1: serde_json::Value,
+        value1: Box<serde_json::Value>,
         /// Second value from another policy.
-        value2: serde_json::Value,
+        value2: Box<serde_json::Value>,
     },
 }
 

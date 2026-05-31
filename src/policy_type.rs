@@ -1,7 +1,8 @@
 use claudius::{
     Anthropic, ContentBlock, JsonSchema, KnownModel, MessageCreateParams, MessageParam,
-    MessageRole, Model, ThinkingConfig,
+    MessageRole, Model, OutputFormat,
 };
+use uuid::Uuid;
 
 use crate::{parser, Field, ParseError, Policy};
 
@@ -67,52 +68,92 @@ impl PolicyType {
         injection: &str,
     ) -> Result<Policy, claudius::Error> {
         let mut schema = serde_json::json! {{}};
-        let mut properties = serde_json::json! {{}};
+        let mut action_masks = Vec::new();
         for field in self.fields.iter() {
-            let (name, schema) = match field {
+            let field_mask = Uuid::new_v4().to_string();
+            let (name, schema, enum_values) = match field {
                 Field::Bool {
                     name,
                     default: _,
                     on_conflict: _,
-                } => (name.clone(), bool::json_schema()),
+                } => (name.clone(), bool::json_schema(), Vec::new()),
                 Field::Number {
                     name,
                     default: _,
                     on_conflict: _,
-                } => (name.clone(), f64::json_schema()),
+                } => (name.clone(), f64::json_schema(), Vec::new()),
                 Field::String {
                     name,
                     default: _,
                     on_conflict: _,
-                } => (name.clone(), String::json_schema()),
+                } => (name.clone(), String::json_schema(), Vec::new()),
                 Field::StringEnum {
                     name,
                     values,
                     default: _,
                     on_conflict: _,
                 } => {
+                    let enum_values = values
+                        .iter()
+                        .map(|value| (value.clone(), Uuid::new_v4().to_string()))
+                        .collect::<Vec<_>>();
                     let mut schema = String::json_schema();
-                    schema["enum"] = values.clone().into();
-                    (name.clone(), schema)
+                    schema["enum"] = enum_values
+                        .iter()
+                        .map(|(_, mask)| mask.clone())
+                        .collect::<Vec<_>>()
+                        .into();
+                    (name.clone(), schema, enum_values)
                 }
-                Field::StringArray { name } => (name.clone(), Vec::<String>::json_schema()),
+                Field::StringArray { name } => {
+                    (name.clone(), Vec::<String>::json_schema(), Vec::new())
+                }
             };
-            properties[name] = schema;
+            action_masks.push(SemanticActionMask {
+                name,
+                mask: field_mask,
+                enum_values,
+                schema,
+            });
         }
-        schema["required"] = serde_json::json! {[]};
+        let mut masked_injection = semantic_action_clause(injection).to_string();
+        for action_mask in &action_masks {
+            masked_injection =
+                replace_token(&masked_injection, &action_mask.name, &action_mask.mask);
+            if let Some(singular) = action_mask.name.strip_suffix('s') {
+                masked_injection = replace_token(&masked_injection, singular, &action_mask.mask);
+            }
+            for (value, mask) in &action_mask.enum_values {
+                masked_injection =
+                    masked_injection.replace(&format!("{value:?}"), &format!("{mask:?}"));
+            }
+        }
+        let mut properties = serde_json::json! {{}};
+        let mut required = Vec::new();
+        for action_mask in &action_masks {
+            if masked_injection.contains(&action_mask.mask) {
+                properties[&action_mask.mask] = action_mask.schema.clone();
+                required.push(action_mask.mask.clone());
+            }
+        }
+        schema["required"] = required.into();
         schema["type"] = "object".into();
         schema["properties"] = properties;
+        schema["additionalProperties"] = false.into();
         let system = include_str!("../prompts/generate-semantic-injection.md").to_string();
         let req = MessageCreateParams {
             max_tokens: 2048,
-            model: Model::Known(KnownModel::ClaudeSonnet40),
+            model: Model::Known(KnownModel::ClaudeOpus48),
+            cache_control: None,
             messages: vec![MessageParam::new_with_string(
-                format!("<ask>{injection}</ask>"),
+                format!("<ask>{masked_injection}</ask>"),
                 MessageRole::User,
             )],
             system: Some(system.into()),
-            thinking: Some(ThinkingConfig::enabled(1024)),
+            thinking: None,
             metadata: None,
+            output_config: None,
+            output_format: Some(OutputFormat::json_schema(schema)),
             stop_sequences: None,
             temperature: None,
             tool_choice: None,
@@ -120,7 +161,14 @@ impl PolicyType {
             top_k: None,
             top_p: None,
             stream: false,
+            betas: None,
         };
+        if std::env::var_os("POLICYAI_LOG_SEMANTIC_REQUEST").is_some() {
+            eprintln!(
+                "semantic injection request:\n{}",
+                serde_json::to_string_pretty(&req)?
+            );
+        }
         let resp = client.send(req).await?;
         let prompt = injection.to_string();
         let raw_response = resp
@@ -152,12 +200,143 @@ impl PolicyType {
             raw_response.trim()
         };
 
-        let action = serde_json::from_str(json_content)?;
+        let mut action = serde_json::from_str(json_content)?;
+        unmask_semantic_action(&action_masks, &mut action);
+        self.sanitize_semantic_action(&mut action);
         Ok(Policy {
             r#type: self.clone(),
             prompt,
             action,
         })
+    }
+
+    fn sanitize_semantic_action(&self, action: &mut serde_json::Value) {
+        let serde_json::Value::Object(action) = action else {
+            return;
+        };
+        action.retain(|name, value| {
+            let Some(field) = self.fields.iter().find(|field| field.name() == name) else {
+                return false;
+            };
+            coerce_action_value(field, value)
+        });
+    }
+}
+
+struct SemanticActionMask {
+    name: String,
+    mask: String,
+    enum_values: Vec<(String, String)>,
+    schema: serde_json::Value,
+}
+
+fn unmask_semantic_action(masks: &[SemanticActionMask], action: &mut serde_json::Value) {
+    let serde_json::Value::Object(object) = action else {
+        return;
+    };
+    let mut unmasked = serde_json::Map::new();
+    for mask in masks {
+        let Some(mut value) = object.remove(&mask.mask) else {
+            continue;
+        };
+        if let Some(enum_value) = value.as_str().and_then(|value_string| {
+            mask.enum_values
+                .iter()
+                .find(|(_, enum_mask)| enum_mask == value_string)
+                .map(|(enum_value, _)| enum_value)
+        }) {
+            value = serde_json::Value::String(enum_value.clone());
+        }
+        unmasked.insert(mask.name.clone(), value);
+    }
+    *action = serde_json::Value::Object(unmasked);
+}
+
+fn semantic_action_clause(injection: &str) -> &str {
+    let trimmed = injection.trim();
+    if let Some((_, action)) = trimmed.split_once(':') {
+        return action.trim();
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("if ") || lower.starts_with("when ") {
+        if let Some(index) = trimmed.find(',') {
+            return trimmed[index + 1..].trim();
+        }
+    }
+    trimmed
+}
+
+fn replace_token(input: &str, token: &str, replacement: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    let mut token_start = None;
+
+    for (index, ch) in input.char_indices() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            token_start.get_or_insert(index);
+        } else {
+            if let Some(start) = token_start.take() {
+                push_replaced_token(input, start, index, token, replacement, &mut output);
+            }
+            output.push(ch);
+        }
+    }
+
+    if let Some(start) = token_start {
+        push_replaced_token(input, start, input.len(), token, replacement, &mut output);
+    }
+
+    output
+}
+
+fn push_replaced_token(
+    input: &str,
+    start: usize,
+    end: usize,
+    token: &str,
+    replacement: &str,
+    output: &mut String,
+) {
+    let found = &input[start..end];
+    if found.eq_ignore_ascii_case(token) {
+        output.push_str(replacement);
+    } else {
+        output.push_str(found);
+    }
+}
+
+fn coerce_action_value(field: &Field, value: &mut serde_json::Value) -> bool {
+    match field {
+        Field::Bool { .. } => match value {
+            serde_json::Value::Bool(_) => true,
+            serde_json::Value::String(s) if s == "true" => {
+                *value = serde_json::Value::Bool(true);
+                true
+            }
+            serde_json::Value::String(s) if s == "false" => {
+                *value = serde_json::Value::Bool(false);
+                true
+            }
+            _ => false,
+        },
+        Field::Number { .. } => match value {
+            serde_json::Value::Number(_) => true,
+            serde_json::Value::String(s) => s
+                .parse::<f64>()
+                .ok()
+                .and_then(serde_json::Number::from_f64)
+                .map(|number| {
+                    *value = serde_json::Value::Number(number);
+                })
+                .is_some(),
+            _ => false,
+        },
+        Field::String { .. } => value.is_string(),
+        Field::StringEnum { values, .. } => value
+            .as_str()
+            .is_some_and(|value| values.iter().any(|allowed| allowed == value)),
+        Field::StringArray { .. } => value
+            .as_array()
+            .is_some_and(|values| values.iter().all(serde_json::Value::is_string)),
     }
 }
 
@@ -431,6 +610,68 @@ mod tests {
         assert!(debug_str.contains("PolicyType"));
         assert!(debug_str.contains("DebugTest"));
         assert!(debug_str.contains("fields"));
+    }
+
+    #[test]
+    fn sanitize_semantic_action_drops_unknown_fields() {
+        let policy_type = create_test_policy_type();
+        let mut action = serde_json::json!({
+            "active": true,
+            "priority": "high",
+            "extra": "ignored",
+        });
+
+        policy_type.sanitize_semantic_action(&mut action);
+
+        assert_eq!(
+            serde_json::json!({
+                "active": true,
+                "priority": "high",
+            }),
+            action
+        );
+    }
+
+    #[test]
+    fn sanitize_semantic_action_coerces_simple_values() {
+        let policy_type = create_test_policy_type();
+        let mut action = serde_json::json!({
+            "active": "true",
+            "score": "42.5",
+            "tags": ["example"],
+            "extra": "ignored",
+        });
+
+        policy_type.sanitize_semantic_action(&mut action);
+
+        assert_eq!(
+            serde_json::json!({
+                "active": true,
+                "score": 42.5,
+                "tags": ["example"],
+            }),
+            action
+        );
+    }
+
+    #[test]
+    fn semantic_action_clause_removes_condition() {
+        assert_eq!(
+            "Set \"priority\" to \"low\" and \"unread\" to true.",
+            semantic_action_clause(
+                "When the email is about AI:  Set \"priority\" to \"low\" and \"unread\" to true."
+            )
+        );
+        assert_eq!(
+            "set \"category\" to \"distributed systems\".",
+            semantic_action_clause(
+                "If the user talks about Paxos, set \"category\" to \"distributed systems\"."
+            )
+        );
+        assert_eq!(
+            "Assign weight to the email.",
+            semantic_action_clause("Assign weight to the email.")
+        );
     }
 
     #[test]

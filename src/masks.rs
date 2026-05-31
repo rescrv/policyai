@@ -439,7 +439,7 @@ impl StringArrayMask {
             } else if let serde_json::Value::Array(a) = value {
                 let mut all = vec![];
                 for v in a {
-                    all.extend(extract_strings(v, depth - 1)?.into_iter());
+                    all.extend(extract_strings(v, depth - 1)?);
                 }
                 Some(all)
             } else {

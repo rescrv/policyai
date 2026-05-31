@@ -32,7 +32,7 @@ use crate::{ApplyError, Policy, Report, ReportBuilder, Usage};
 ///
 /// # let template = MessageCreateParams {
 /// #     max_tokens: 1024,
-/// #     model: Model::Known(KnownModel::ClaudeSonnet40),
+/// #     model: Model::Known(KnownModel::ClaudeOpus48),
 /// #     messages: vec![],
 /// #     ..Default::default()
 /// # };
@@ -302,6 +302,7 @@ impl Manager {
                 description: Some("output JSON".to_string()),
                 input_schema: report.schema(),
                 cache_control: None,
+                strict: None,
             },
         )]);
         Ok((report, req))

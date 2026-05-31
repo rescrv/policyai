@@ -3,8 +3,8 @@ use std::io::{BufRead, BufReader};
 use std::time::Instant;
 
 use claudius::{
-    push_or_merge_message, Anthropic, ContentBlock, JsonSchema, MessageCreateParams, MessageParam,
-    MessageRole, Metadata, Model, SystemPrompt, TextBlock, ToolChoice,
+    push_or_merge_message, Anthropic, ContentBlock, JsonSchema, KnownModel, MessageCreateParams,
+    MessageParam, MessageRole, Metadata, Model, SystemPrompt, TextBlock, ToolChoice,
 };
 
 use policyai::data::{EvaluationReport, Metrics, TestDataPoint};
@@ -104,6 +104,7 @@ pub async fn naive_apply(
             description: Some("output JSON according to policy".to_string()),
             input_schema: schema,
             cache_control: None,
+            strict: None,
         },
     )]);
     let start_time = Instant::now();
@@ -273,7 +274,7 @@ async fn main() {
                 &point.policies,
                 &MessageCreateParams {
                     max_tokens: 4096,
-                    model: Model::Custom("claude-sonnet-4-5".to_string()),
+                    model: Model::Known(KnownModel::ClaudeOpus48),
                     ..Default::default()
                 },
                 &point.text,
@@ -308,7 +309,7 @@ async fn main() {
                     &client,
                     MessageCreateParams {
                         max_tokens: 4096,
-                        model: Model::Custom("claude-sonnet-4-5".to_string()),
+                        model: Model::Known(KnownModel::ClaudeOpus48),
                         ..Default::default()
                     },
                     &point.text,

@@ -186,8 +186,8 @@ impl Report {
             if *existing != serde_json::Value::Bool(default) {
                 self.errors.push(PolicyError::DefaultConflict {
                     field: field.to_string(),
-                    existing: existing.clone(),
-                    new: serde_json::Value::Bool(default),
+                    existing: Box::new(existing.clone()),
+                    new: Box::new(serde_json::Value::Bool(default)),
                     suggestion: "Ensure all policies use the same default value for this field"
                         .to_string(),
                 });
@@ -304,8 +304,8 @@ impl Report {
             if *existing != serde_json::Value::Number(default.clone()) {
                 self.errors.push(PolicyError::DefaultConflict {
                     field: field.to_string(),
-                    existing: existing.clone(),
-                    new: serde_json::Value::Number(default),
+                    existing: Box::new(existing.clone()),
+                    new: Box::new(serde_json::Value::Number(default)),
                     suggestion: "Ensure all policies use the same default value for this field"
                         .to_string(),
                 });
@@ -425,8 +425,8 @@ impl Report {
             if *existing != serde_json::Value::String(default.clone()) {
                 self.errors.push(PolicyError::DefaultConflict {
                     field: field.to_string(),
-                    existing: existing.clone(),
-                    new: serde_json::Value::String(default),
+                    existing: Box::new(existing.clone()),
+                    new: Box::new(serde_json::Value::String(default)),
                     suggestion: "Ensure all policies use the same default value for this field"
                         .to_string(),
                 });

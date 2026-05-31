@@ -243,7 +243,7 @@ fn generate_conflict_test_case(
     // Decide how many fields to create conflicts for (at least 1, up to all)
     let num_conflict_fields = rng.random_range(1..=agreement_fields.len());
     let selected_fields: Vec<_> = agreement_fields
-        .choose_multiple(rng, num_conflict_fields)
+        .sample(rng, num_conflict_fields)
         .cloned()
         .collect();
 
