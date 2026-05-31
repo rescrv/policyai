@@ -106,9 +106,9 @@ let policy3 = policy_type
 
 ```rust
 let mut manager = Manager::default();
-manager.add(policy1);
-manager.add(policy2);
-manager.add(policy3);
+manager.add(policy1)?;
+manager.add(policy2)?;
+manager.add(policy3)?;
 
 let report = manager.apply(
     &client,
@@ -216,9 +216,11 @@ PolicyAI is **not** the right tool when:
 
 For production agents with large policy sets, you don't want to apply every policy to every input. Use **vector retrieval** to select relevant policies dynamically:
 
-### Pattern: PolicyAI + Chroma
+### Pattern: PolicyAI + Vector Retrieval
 
-(Example is illustrative, but likely needs work to work because Claude hallucinated some of this)
+The exact storage API depends on your vector database. The durable pattern is to
+embed the policy's semantic injection, store the serialized `Policy`, retrieve a
+small top-k set for each input, and compose only those policies.
 
 ```rust
 use chromadb::{ChromaClient, Collection};
@@ -229,7 +231,7 @@ async fn process_with_retrieval(
     chroma: &Collection,
     input: &str,
 ) -> Result<Report, Box<dyn std::error::Error>> {
-    // 1. Retrieve relevant policies from vector database
+    // 1. Retrieve relevant policies from your vector database
     let results = chroma.query(
         vec![input.to_string()],
         5,  // top 5 most relevant policies
@@ -250,7 +252,7 @@ async fn process_with_retrieval(
     // 3. Apply only relevant policies
     let mut manager = Manager::default();
     for policy in policies {
-        manager.add(policy);
+        manager.add(policy)?;
     }
 
     let report = manager.apply(client, template, input, None).await?;
@@ -322,7 +324,7 @@ Add PolicyAI to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-policyai = "0.3"
+policyai = "0.4"
 ```
 
 Basic usage:
@@ -349,7 +351,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Apply it
     let mut manager = Manager::default();
-    manager.add(policy);
+    manager.add(policy)?;
 
     let report = manager.apply(
         &client,
@@ -371,6 +373,11 @@ PolicyAI includes tools for testing and debugging:
 - `policyai-regression-report`: Generate reports on policy behavior
 - `policyai-extract-regressions`: Extract failing cases for analysis
 - `policyai-regressions-to-examples`: Convert regressions to test examples
+
+## Testing
+
+Run deterministic tests with `cargo test`. Live Anthropic-backed tests are
+skipped unless `POLICYAI_LIVE_TESTS=1` is set alongside `CLAUDIUS_API_KEY`.
 
 ## Implementation Note
 
