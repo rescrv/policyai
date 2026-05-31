@@ -30,6 +30,8 @@ struct Options {
     thinking: Option<ThinkingArg>,
     #[arrrg(optional, "Adaptive thinking effort: low, medium, or high.")]
     effort: Option<EffortArg>,
+    #[arrrg(optional, "Maximum candidate attempts per accepted policy.")]
+    max_attempts_per_policy: Option<usize>,
 }
 
 #[tokio::main]
@@ -46,6 +48,7 @@ async fn main() -> Result<(), claudius::Error> {
         .map(|model| model.parse::<Model>().unwrap())
         .unwrap_or(policyai::DEFAULT_MODEL);
     let max_tokens = options.max_tokens.unwrap_or(2048);
+    let max_attempts = options.max_attempts_per_policy.unwrap_or(10) * options.policies;
     let thinking = Some(
         options
             .thinking
@@ -73,7 +76,9 @@ async fn main() -> Result<(), claudius::Error> {
         let text = texts.choose(&mut rng).unwrap();
         let mut injections: Vec<String> = vec![];
         let mut rationales: Vec<String> = vec![];
-        while injections.len() < options.policies {
+        let mut attempts = 0;
+        while injections.len() < options.policies && attempts < max_attempts {
+            attempts += 1;
             let system = r#"
 You are an expert writer.  We are developing an instruction-processing engine that takes as input
 instructions and text to output JSON.  Every instruction has two parts, first it has the _semantic
@@ -148,7 +153,25 @@ Text:
             {
                 injections.push(injection);
                 rationales.push(thought);
+                eprintln!(
+                    "accepted {} of {} policies after {attempts} attempts",
+                    injections.len(),
+                    options.policies
+                );
+            } else {
+                eprintln!(
+                    "rejected candidate; accepted {} of {} policies after {attempts} attempts",
+                    injections.len(),
+                    options.policies
+                );
             }
+        }
+        if injections.len() < options.policies {
+            return Err(claudius::Error::unknown(format!(
+                "only generated {} of {} semantic injections after {attempts} attempts",
+                injections.len(),
+                options.policies
+            )));
         }
         println!(
             "{}",

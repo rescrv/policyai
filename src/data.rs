@@ -331,7 +331,7 @@ Output just this one-word answer
                 ]),
                 role: MessageRole::User,
             }],
-            stop_sequences: Some(vec!["yes".to_string(), "no".to_string()]),
+            stop_sequences: None,
             thinking,
             stream: false,
             metadata: None,

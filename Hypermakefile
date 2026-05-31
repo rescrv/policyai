@@ -2,15 +2,17 @@ TEXTS := data/ai-tweets.jsonl
 MODEL := accounts/fireworks/models/kimi-k2p6
 MODEL_ALIAS := kimi-k2p6
 MAX_TOKENS := 16384
-THINKING_ARGS := --thinking adaptive --effort high
-RUN_ALIAS := $(MODEL_ALIAS)-adaptive-high-$(MAX_TOKENS)
+THINKING_ARGS := --thinking 1024
+MAX_ATTEMPTS_PER_POLICY := 10
+RUN_ALIAS := kimi-k2p6-think-1024
 SEMANTIC_INJECTIONS := 2
 POLICIES_PER_TEXT := 5
-NEGATIVES_PER_TEXT := 1
+NEGATIVES_PER_TEXT := 6
 DATA_TYPE := ( bool number string enum-field array )
 CONFLICT_RATE := 0
 TEST_CASES := 10
-MATCHING := ( 0 1 2 3 4 5 )
+#MATCHING := ( 0 1 2 3 4 5 )
+MATCHING := ( 0 1 )
 POLICIES := 5
 
 K := 3
@@ -21,7 +23,7 @@ N := 3
 all: @data/report-$(RUN_ALIAS)-$(DATA_TYPE)-$(MATCHING)-$(POLICIES).jsonl @data/regressions-$(RUN_ALIAS)-$(DATA_TYPE)-$(MATCHING)-$(POLICIES).jsonl
 
 data/semantic-injections-$(RUN_ALIAS).jsonl: $(TEXTS)
-	cargo run --example generate-semantic-injections -- --model $(MODEL) --max-tokens $(MAX_TOKENS) $(THINKING_ARGS) --samples $(SEMANTIC_INJECTIONS) --policies $(POLICIES_PER_TEXT) --success $(K) --total $(N) $< > $@
+	cargo run --example generate-semantic-injections -- --model $(MODEL) --max-tokens $(MAX_TOKENS) $(THINKING_ARGS) --max-attempts-per-policy $(MAX_ATTEMPTS_PER_POLICY) --samples $(SEMANTIC_INJECTIONS) --policies $(POLICIES_PER_TEXT) --success $(K) --total $(N) $< > $@
 
 data/decidables-$(RUN_ALIAS).jsonl: data/semantic-injections-$(RUN_ALIAS).jsonl
 	cargo run --example generate-decidables -- --model $(MODEL) --max-tokens $(MAX_TOKENS) $(THINKING_ARGS) --policies $(NEGATIVES_PER_TEXT) --success $(K) --total $(N) $< > $@
