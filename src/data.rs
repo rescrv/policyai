@@ -6,8 +6,7 @@
 
 use claudius::{
     Anthropic, CacheControlEphemeral, ContentBlock, Effort, MessageCreateParams, MessageParam,
-    MessageParamContent, MessageRole, Model, OutputConfig, StopReason, SystemPrompt, TextBlock,
-    ThinkingConfig,
+    MessageParamContent, MessageRole, Model, OutputConfig, SystemPrompt, TextBlock, ThinkingConfig,
 };
 
 use crate::{Policy, Report, Usage};
@@ -216,29 +215,50 @@ Output just this one-word answer
             betas: None,
         };
         let resp = client.send(req).await?;
-        if !matches!(resp.stop_reason, Some(StopReason::StopSequence)) {
-            return Err(claudius::Error::unknown(
-                "did not get a stop sequence".to_string(),
-            ));
-        }
-        match resp.stop_sequence.as_deref() {
-            Some("yes") => {
+        match policy_applies_answer(resp.stop_sequence.as_deref(), &resp.content)? {
+            true => {
                 success += 1;
             }
-            Some("no") => {}
-            Some(_) => {
-                return Err(claudius::Error::unknown(
-                    "expected yes/no stop sequence".to_string(),
-                ));
-            }
-            None => {
-                return Err(claudius::Error::unknown(
-                    "expected stop sequence".to_string(),
-                ));
-            }
+            false => {}
         }
     }
     Ok(success)
+}
+
+fn policy_applies_answer(
+    stop_sequence: Option<&str>,
+    content: &[ContentBlock],
+) -> Result<bool, claudius::Error> {
+    match stop_sequence {
+        Some("yes") => return Ok(true),
+        Some("no") => return Ok(false),
+        Some(other) => {
+            return Err(claudius::Error::unknown(format!(
+                "expected yes/no stop sequence, got {other:?}"
+            )));
+        }
+        None => {}
+    }
+
+    let answer = content
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text(text) => Some(text.text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let first_word = answer
+        .split(|ch: char| !ch.is_ascii_alphabetic())
+        .find(|word| !word.is_empty())
+        .map(str::to_ascii_lowercase);
+    match first_word.as_deref() {
+        Some("yes") => Ok(true),
+        Some("no") => Ok(false),
+        _ => Err(claudius::Error::unknown(format!(
+            "expected yes/no answer, got {answer:?}"
+        ))),
+    }
 }
 
 /// A semantic injection test case with positive and negative examples.

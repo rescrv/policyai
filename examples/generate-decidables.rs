@@ -24,7 +24,7 @@ struct Options {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), std::io::Error> {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (options, free) = Options::from_command_line_relaxed(
         "USAGE: policyai-generate-decidables [OPTIONS] SEMANTIC-INJECTIONS",
     );
@@ -65,8 +65,7 @@ async fn main() -> Result<(), std::io::Error> {
                 options.total,
                 model.clone(),
             )
-            .await
-            .unwrap()
+            .await?
             {
                 negatives.push(policy_fragment.clone());
             }
