@@ -45,6 +45,9 @@ pub mod data;
 /// Analysis tools for evaluation metrics
 pub mod analysis;
 
+/// Compiler for line-oriented policy declarations
+pub mod compiler;
+
 mod errors;
 mod field;
 mod manager;
