@@ -310,58 +310,108 @@ Say, "no" to indicate the policy does not apply.
 Output just this one-word answer
 "#
         .to_string();
-        let req = MessageCreateParams {
+        let req = policy_application_request(
+            &system,
+            text,
+            semantic_injection,
+            model.clone(),
             max_tokens,
-            model: model.clone(),
-            cache_control: None,
-            system: Some(SystemPrompt::from_blocks(vec![TextBlock {
-                text: system.to_string(),
-                cache_control: Some(CacheControlEphemeral::new()),
-                citations: None,
-            }])),
-            messages: vec![MessageParam {
-                content: MessageParamContent::Array(vec![
-                    ContentBlock::Text(TextBlock {
-                        text: format!("<policy>{semantic_injection}</policy>"),
-                        cache_control: None,
-                        citations: None,
-                    }),
-                    ContentBlock::Text(TextBlock {
-                        text: format!("<text>{text}</text>"),
-                        cache_control: None,
-                        citations: None,
-                    }),
-                ]),
-                role: MessageRole::User,
-            }],
-            stop_sequences: None,
             thinking,
-            stream: false,
-            metadata: None,
-            output_config: output_config_for_thinking(thinking, effort),
-            output_format: None,
-            temperature: None,
-            tools: None,
-            tool_choice: None,
-            top_p: None,
-            top_k: None,
-            betas: None,
-        };
+            effort,
+        );
         let resp = client.send(req).await?;
-        if policy_applies_answer(resp.stop_sequence.as_deref(), &resp.content)? {
+        let answer = match policy_applies_answer(resp.stop_sequence.as_deref(), &resp.content)? {
+            Some(answer) => answer,
+            None if thinking.is_some_and(|thinking| thinking != ThinkingConfig::Disabled) => {
+                let req = policy_application_request(
+                    &system,
+                    text,
+                    semantic_injection,
+                    model.clone(),
+                    max_tokens,
+                    None,
+                    None,
+                );
+                let resp = client.send(req).await?;
+                policy_applies_answer(resp.stop_sequence.as_deref(), &resp.content)?.ok_or_else(
+                    || {
+                        claudius::Error::unknown(
+                            "expected yes/no answer after retry without thinking, got empty response"
+                                .to_string(),
+                        )
+                    },
+                )?
+            }
+            None => {
+                return Err(claudius::Error::unknown(
+                    "expected yes/no answer, got empty response".to_string(),
+                ));
+            }
+        };
+        if answer {
             success += 1;
         }
     }
     Ok(success)
 }
 
+fn policy_application_request(
+    system: &str,
+    text: &str,
+    semantic_injection: &str,
+    model: Model,
+    max_tokens: u32,
+    thinking: Option<ThinkingConfig>,
+    effort: Option<Effort>,
+) -> MessageCreateParams {
+    MessageCreateParams {
+        max_tokens,
+        model,
+        cache_control: None,
+        system: Some(SystemPrompt::from_blocks(vec![TextBlock {
+            text: system.to_string(),
+            cache_control: Some(CacheControlEphemeral::new()),
+            citations: None,
+        }])),
+        messages: vec![MessageParam {
+            content: MessageParamContent::Array(vec![
+                ContentBlock::Text(TextBlock {
+                    text: format!("<policy>{semantic_injection}</policy>"),
+                    cache_control: None,
+                    citations: None,
+                }),
+                ContentBlock::Text(TextBlock {
+                    text: format!("<text>{text}</text>"),
+                    cache_control: None,
+                    citations: None,
+                }),
+            ]),
+            role: MessageRole::User,
+        }],
+        // Do not use "yes" or "no" as stop sequences here. Stop sequences can match inside
+        // thinking blocks before the model has emitted a visible final answer.
+        stop_sequences: None,
+        thinking,
+        stream: false,
+        metadata: None,
+        output_config: output_config_for_thinking(thinking, effort),
+        output_format: None,
+        temperature: None,
+        tools: None,
+        tool_choice: None,
+        top_p: None,
+        top_k: None,
+        betas: None,
+    }
+}
+
 fn policy_applies_answer(
     stop_sequence: Option<&str>,
     content: &[ContentBlock],
-) -> Result<bool, claudius::Error> {
+) -> Result<Option<bool>, claudius::Error> {
     match stop_sequence {
-        Some("yes") => return Ok(true),
-        Some("no") => return Ok(false),
+        Some("yes") => return Ok(Some(true)),
+        Some("no") => return Ok(Some(false)),
         Some(other) => {
             return Err(claudius::Error::unknown(format!(
                 "expected yes/no stop sequence, got {other:?}"
@@ -378,13 +428,16 @@ fn policy_applies_answer(
         })
         .collect::<Vec<_>>()
         .join("\n");
+    if answer.trim().is_empty() {
+        return Ok(None);
+    }
     let first_word = answer
         .split(|ch: char| !ch.is_ascii_alphabetic())
         .find(|word| !word.is_empty())
         .map(str::to_ascii_lowercase);
     match first_word.as_deref() {
-        Some("yes") => Ok(true),
-        Some("no") => Ok(false),
+        Some("yes") => Ok(Some(true)),
+        Some("no") => Ok(Some(false)),
         _ => Err(claudius::Error::unknown(format!(
             "expected yes/no answer, got {answer:?}"
         ))),
@@ -648,6 +701,24 @@ mod tests {
         assert_eq!(injection.injections, deserialized.injections);
         assert_eq!(injection.rationales, deserialized.rationales);
         assert_eq!(injection.text, deserialized.text);
+    }
+
+    #[test]
+    fn policy_applies_answer_reads_visible_text() {
+        let content = vec![claudius::ContentBlock::Text(claudius::TextBlock::new(
+            "yes",
+        ))];
+
+        assert_eq!(policy_applies_answer(None, &content).unwrap(), Some(true));
+    }
+
+    #[test]
+    fn policy_applies_answer_ignores_thinking_for_empty_answer() {
+        let content = vec![claudius::ContentBlock::Thinking(
+            claudius::ThinkingBlock::new("yes, this applies", "signature"),
+        )];
+
+        assert_eq!(policy_applies_answer(None, &content).unwrap(), None);
     }
 
     #[test]
