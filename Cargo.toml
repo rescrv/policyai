@@ -22,3 +22,6 @@ shvar = "0.10.0"
 tokio = { version = "1.52.3", features = ["rt", "macros"] }
 utf8path = "0.11.0"
 uuid = { version = "1.18.1", features = ["v4"] }
+
+[dev-dependencies]
+biometrics_prometheus = "0.12"

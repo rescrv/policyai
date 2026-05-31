@@ -40,8 +40,8 @@ impl InferenceConfig {
 /// ```no_run
 /// use policyai::Manager;
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// # use claudius::{Anthropic, MessageCreateParams, KnownModel, Model, MessageParam, MessageRole};
-/// # use policyai::{PolicyType, Policy, Usage};
+/// # use claudius::{Anthropic, MessageCreateParams, MessageParam, MessageRole};
+/// # use policyai::{PolicyType, Policy, Usage, DEFAULT_MODEL};
 ///
 /// let mut manager = Manager::default();
 /// # let client = Anthropic::new(None)?;
@@ -55,7 +55,7 @@ impl InferenceConfig {
 ///
 /// # let template = MessageCreateParams {
 /// #     max_tokens: 1024,
-/// #     model: Model::Known(KnownModel::ClaudeOpus48),
+/// #     model: DEFAULT_MODEL,
 /// #     messages: vec![],
 /// #     ..Default::default()
 /// # };

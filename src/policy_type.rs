@@ -1,6 +1,6 @@
 use claudius::{
-    Anthropic, ContentBlock, JsonSchema, KnownModel, MessageCreateParams, MessageParam,
-    MessageRole, Model, OutputFormat,
+    Anthropic, ContentBlock, JsonSchema, MessageCreateParams, MessageParam, MessageRole, Model,
+    OutputFormat,
 };
 use uuid::Uuid;
 
@@ -61,11 +61,13 @@ impl PolicyType {
     /// Create a new Policy by applying a semantic injection to this PolicyType.
     ///
     /// The semantic injection is a natural language description that gets converted
-    /// into structured actions that conform to this PolicyType's schema.
+    /// into structured actions that conform to this PolicyType's schema using the
+    /// provided model.
     pub async fn with_semantic_injection(
         &self,
         client: &Anthropic,
         injection: &str,
+        model: Model,
     ) -> Result<Policy, claudius::Error> {
         let mut schema = serde_json::json! {{}};
         let mut action_masks = Vec::new();
@@ -143,7 +145,7 @@ impl PolicyType {
         let system = include_str!("../prompts/generate-semantic-injection.md").to_string();
         let req = MessageCreateParams {
             max_tokens: 2048,
-            model: Model::Known(KnownModel::ClaudeOpus48),
+            model,
             cache_control: None,
             messages: vec![MessageParam::new_with_string(
                 format!("<ask>{masked_injection}</ask>"),

@@ -2,7 +2,7 @@ use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader};
 
 use arrrg::CommandLine;
-use claudius::Anthropic;
+use claudius::{Anthropic, Model};
 use rand::prelude::*;
 
 #[derive(Clone, Default, Debug, Eq, PartialEq, arrrg_derive::CommandLine)]
@@ -19,6 +19,8 @@ struct Options {
         "The number of total verifications to perform for each policy."
     )]
     total: usize,
+    #[arrrg(optional, "Anthropic model to use for verification.")]
+    model: Option<String>,
 }
 
 #[tokio::main]
@@ -30,6 +32,11 @@ async fn main() -> Result<(), std::io::Error> {
         eprintln!("expected SEMANTIC-INJECTIONS");
         std::process::exit(13);
     }
+    let model = options
+        .model
+        .as_deref()
+        .map(|model| model.parse::<Model>().unwrap())
+        .unwrap_or(policyai::DEFAULT_MODEL);
     let client = Anthropic::new(None)
         .expect("could not connect to claude")
         .with_max_retries(10)
@@ -56,6 +63,7 @@ async fn main() -> Result<(), std::io::Error> {
                 policy_fragment,
                 options.success,
                 options.total,
+                model.clone(),
             )
             .await
             .unwrap()

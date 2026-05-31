@@ -69,6 +69,10 @@ pub use report::{FieldStats, Report};
 pub use report_builder::ReportBuilder;
 pub use usage::Usage;
 
+/// The default model PolicyAI uses when a caller does not provide one.
+pub const DEFAULT_MODEL: claudius::Model =
+    claudius::Model::Known(claudius::KnownModel::ClaudeSonnet45);
+
 //////////////////////////////////////////////// t64 ///////////////////////////////////////////////
 
 /// A totally-ordered 64-bit floating point number.
@@ -147,7 +151,7 @@ pub(crate) fn number_less_than(lhs: &serde_json::Number, rhs: &serde_json::Numbe
 
 #[cfg(test)]
 mod tests {
-    use claudius::{Anthropic, KnownModel, MessageCreateParams, Model};
+    use claudius::{Anthropic, MessageCreateParams};
 
     use super::*;
 
@@ -320,6 +324,7 @@ mod tests {
             .with_semantic_injection(
                 &client,
                 "If the user talks about Paxos, set \"category\" to \"distributed systems\".",
+                DEFAULT_MODEL,
             )
             .await
             .unwrap();
@@ -343,7 +348,7 @@ mod tests {
             }],
         };
         let policy = policy
-            .with_semantic_injection(&client, "Assign weight to the email.")
+            .with_semantic_injection(&client, "Assign weight to the email.", DEFAULT_MODEL)
             .await
             .unwrap();
         assert!(matches!(
@@ -393,6 +398,7 @@ mod tests {
             .with_semantic_injection(
                 &client,
                 "When the email is about AI:  Set \"priority\" to \"low\" and \"unread\" to true.",
+                DEFAULT_MODEL,
             )
             .await
             .unwrap();
@@ -407,7 +413,7 @@ mod tests {
                 &Anthropic::new(None).unwrap(),
                 MessageCreateParams {
                     max_tokens: 2048,
-                    model: Model::Known(KnownModel::ClaudeOpus48),
+                    model: DEFAULT_MODEL,
                     ..Default::default()
                 },
                 r#"From: robert@example.org
