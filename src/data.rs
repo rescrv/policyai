@@ -11,6 +11,94 @@ use claudius::{
 
 use crate::{Policy, Report, Usage};
 
+/// Command-line wrapper for [`ThinkingConfig`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ThinkingArg(pub ThinkingConfig);
+
+impl Eq for ThinkingArg {}
+
+impl std::str::FromStr for ThinkingArg {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "adaptive" => Ok(Self(ThinkingConfig::adaptive())),
+            "disabled" | "none" | "off" => Ok(Self(ThinkingConfig::disabled())),
+            value => value
+                .parse::<u32>()
+                .map(|budget| Self(ThinkingConfig::enabled(budget)))
+                .map_err(|_| {
+                    format!("expected thinking to be adaptive, disabled, or a token budget; got {value:?}")
+                }),
+        }
+    }
+}
+
+impl std::fmt::Display for ThinkingArg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.0 == ThinkingConfig::adaptive() {
+            write!(f, "adaptive")
+        } else if self.0 == ThinkingConfig::disabled() {
+            write!(f, "disabled")
+        } else {
+            write!(f, "{}", self.0.num_tokens())
+        }
+    }
+}
+
+impl From<ThinkingArg> for ThinkingConfig {
+    fn from(value: ThinkingArg) -> Self {
+        value.0
+    }
+}
+
+/// Command-line wrapper for [`Effort`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EffortArg(pub Effort);
+
+impl std::str::FromStr for EffortArg {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "low" => Ok(Self(Effort::Low)),
+            "medium" => Ok(Self(Effort::Medium)),
+            "high" => Ok(Self(Effort::High)),
+            _ => Err(format!(
+                "expected effort to be one of low, medium, high; got {value:?}"
+            )),
+        }
+    }
+}
+
+impl std::fmt::Display for EffortArg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            Effort::Low => write!(f, "low"),
+            Effort::Medium => write!(f, "medium"),
+            Effort::High => write!(f, "high"),
+        }
+    }
+}
+
+impl From<EffortArg> for Effort {
+    fn from(value: EffortArg) -> Self {
+        value.0
+    }
+}
+
+/// Build the output configuration that carries adaptive thinking effort.
+pub fn output_config_for_thinking(
+    thinking: Option<ThinkingConfig>,
+    effort: Option<Effort>,
+) -> Option<OutputConfig> {
+    if matches!(thinking, Some(ThinkingConfig::Adaptive)) {
+        effort.map(|effort| OutputConfig::new().with_effort(effort))
+    } else {
+        None
+    }
+}
+
 /// A semantic injection with multiple candidate injections and their rationales.
 ///
 /// This structure represents test data for evaluating semantic injections against text.
@@ -52,6 +140,9 @@ pub struct SemanticInjection {
 /// * `k` - Minimum number of successes required
 /// * `n` - Maximum number of attempts to make
 /// * `model` - The model to use for policy applicability checks
+/// * `max_tokens` - The maximum output token budget for each check
+/// * `thinking` - Thinking configuration for each check
+/// * `effort` - Adaptive thinking effort, used when `thinking` is adaptive
 ///
 /// # Returns
 ///
@@ -65,7 +156,7 @@ pub struct SemanticInjection {
 /// # Examples
 ///
 /// ```no_run
-/// use claudius::Anthropic;
+/// use claudius::{Anthropic, Effort, ThinkingConfig};
 /// use policyai::{data::policy_applies, DEFAULT_MODEL};
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -76,7 +167,10 @@ pub struct SemanticInjection {
 ///     "If text indicates urgency, mark as high priority",
 ///     3,  // Need 3 successes
 ///     5,  // Out of 5 attempts
-///     DEFAULT_MODEL
+///     DEFAULT_MODEL,
+///     1030,
+///     Some(ThinkingConfig::adaptive()),
+///     Some(Effort::Medium)
 /// ).await?;
 /// # Ok(())
 /// # }
@@ -88,8 +182,23 @@ pub async fn policy_applies(
     k: usize,
     n: usize,
     model: Model,
+    max_tokens: u32,
+    thinking: Option<ThinkingConfig>,
+    effort: Option<Effort>,
 ) -> Result<bool, claudius::Error> {
-    Ok(apply_policy_fractional(client, text, semantic_injection, k, n, model).await? >= k)
+    Ok(apply_policy_fractional(
+        client,
+        text,
+        semantic_injection,
+        k,
+        n,
+        model,
+        max_tokens,
+        thinking,
+        effort,
+    )
+    .await?
+        >= k)
 }
 
 /// Determine if a policy does NOT apply to given text with statistical confidence.
@@ -106,6 +215,9 @@ pub async fn policy_applies(
 /// * `k` - Minimum number of successes that would indicate the policy applies
 /// * `n` - Maximum number of attempts to make
 /// * `model` - The model to use for policy applicability checks
+/// * `max_tokens` - The maximum output token budget for each check
+/// * `thinking` - Thinking configuration for each check
+/// * `effort` - Adaptive thinking effort, used when `thinking` is adaptive
 ///
 /// # Returns
 ///
@@ -119,7 +231,7 @@ pub async fn policy_applies(
 /// # Examples
 ///
 /// ```no_run
-/// use claudius::Anthropic;
+/// use claudius::{Anthropic, Effort, ThinkingConfig};
 /// use policyai::{data::policy_does_not_apply, DEFAULT_MODEL};
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -130,7 +242,10 @@ pub async fn policy_applies(
 ///     "If text indicates urgency, mark as high priority",
 ///     3,  // Would need 3 successes to apply
 ///     5,  // Out of 5 attempts
-///     DEFAULT_MODEL
+///     DEFAULT_MODEL,
+///     1030,
+///     Some(ThinkingConfig::adaptive()),
+///     Some(Effort::Medium)
 /// ).await?;
 /// # Ok(())
 /// # }
@@ -142,11 +257,23 @@ pub async fn policy_does_not_apply(
     k: usize,
     n: usize,
     model: Model,
+    max_tokens: u32,
+    thinking: Option<ThinkingConfig>,
+    effort: Option<Effort>,
 ) -> Result<bool, claudius::Error> {
-    Ok(
-        apply_policy_fractional(client, text, semantic_injection, k, n, model).await?
-            <= n.saturating_sub(k),
+    Ok(apply_policy_fractional(
+        client,
+        text,
+        semantic_injection,
+        k,
+        n,
+        model,
+        max_tokens,
+        thinking,
+        effort,
     )
+    .await?
+        <= n.saturating_sub(k))
 }
 
 async fn apply_policy_fractional(
@@ -156,6 +283,9 @@ async fn apply_policy_fractional(
     k: usize,
     n: usize,
     model: Model,
+    max_tokens: u32,
+    thinking: Option<ThinkingConfig>,
+    effort: Option<Effort>,
 ) -> Result<usize, claudius::Error> {
     let mut success = 0;
     let mut total = 0;
@@ -178,7 +308,7 @@ Output just this one-word answer
 "#
         .to_string();
         let req = MessageCreateParams {
-            max_tokens: 1030,
+            max_tokens,
             model: model.clone(),
             cache_control: None,
             system: Some(SystemPrompt::from_blocks(vec![TextBlock {
@@ -202,10 +332,10 @@ Output just this one-word answer
                 role: MessageRole::User,
             }],
             stop_sequences: Some(vec!["yes".to_string(), "no".to_string()]),
-            thinking: Some(ThinkingConfig::adaptive()),
+            thinking,
             stream: false,
             metadata: None,
-            output_config: Some(OutputConfig::new().with_effort(Effort::Medium)),
+            output_config: output_config_for_thinking(thinking, effort),
             output_format: None,
             temperature: None,
             tools: None,

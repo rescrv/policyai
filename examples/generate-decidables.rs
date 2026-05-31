@@ -2,7 +2,8 @@ use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader};
 
 use arrrg::CommandLine;
-use claudius::{Anthropic, Model};
+use claudius::{Anthropic, Effort, Model};
+use policyai::data::{EffortArg, ThinkingArg};
 use rand::prelude::*;
 
 #[derive(Clone, Default, Debug, Eq, PartialEq, arrrg_derive::CommandLine)]
@@ -21,6 +22,12 @@ struct Options {
     total: usize,
     #[arrrg(optional, "Anthropic model to use for verification.")]
     model: Option<String>,
+    #[arrrg(optional, "Maximum output tokens for each verification request.")]
+    max_tokens: Option<u32>,
+    #[arrrg(optional, "Thinking config: adaptive, disabled, or a token budget.")]
+    thinking: Option<ThinkingArg>,
+    #[arrrg(optional, "Adaptive thinking effort: low, medium, or high.")]
+    effort: Option<EffortArg>,
 }
 
 #[tokio::main]
@@ -37,6 +44,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .as_deref()
         .map(|model| model.parse::<Model>().unwrap())
         .unwrap_or(policyai::DEFAULT_MODEL);
+    let max_tokens = options.max_tokens.unwrap_or(1030);
+    let thinking = Some(
+        options
+            .thinking
+            .map(Into::into)
+            .unwrap_or_else(claudius::ThinkingConfig::adaptive),
+    );
+    let effort = Some(options.effort.map(Into::into).unwrap_or(Effort::High));
     let client = Anthropic::new(None)
         .expect("could not connect to claude")
         .with_max_retries(10)
@@ -64,6 +79,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 options.success,
                 options.total,
                 model.clone(),
+                max_tokens,
+                thinking,
+                effort,
             )
             .await?
             {

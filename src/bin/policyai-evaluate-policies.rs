@@ -2,12 +2,14 @@ use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader};
 use std::time::Instant;
 
+use arrrg::CommandLine;
 use claudius::{
-    push_or_merge_message, Anthropic, ContentBlock, JsonSchema, MessageCreateParams, MessageParam,
-    MessageRole, Metadata, Model, SystemPrompt, TextBlock, ToolChoice,
+    push_or_merge_message, Anthropic, ContentBlock, Effort, JsonSchema, MessageCreateParams,
+    MessageParam, MessageRole, Metadata, Model, SystemPrompt, TextBlock, ThinkingConfig,
+    ToolChoice,
 };
 
-use policyai::data::{EvaluationReport, Metrics, TestDataPoint};
+use policyai::data::{EffortArg, EvaluationReport, Metrics, TestDataPoint, ThinkingArg};
 use policyai::{ApplyError, Field, Manager, Policy, Report, Usage, DEFAULT_MODEL};
 
 pub async fn naive_apply(
@@ -252,7 +254,9 @@ fn calculate_field_metrics(
 
 #[tokio::main]
 async fn main() {
-    let (model, files) = parse_args();
+    let (options, files) =
+        CliOptions::from_command_line_relaxed("USAGE: policyai-evaluate-policies [OPTIONS] FILES");
+    let options = RuntimeOptions::from(options);
     let client = Anthropic::new(None).unwrap();
     for file in files {
         let file = OpenOptions::new()
@@ -287,8 +291,13 @@ async fn main() {
                 &client,
                 &point.policies,
                 &MessageCreateParams {
-                    max_tokens: 4096,
-                    model: model.clone(),
+                    max_tokens: options.max_tokens,
+                    model: options.model.clone(),
+                    thinking: options.thinking,
+                    output_config: policyai::data::output_config_for_thinking(
+                        options.thinking,
+                        options.effort,
+                    ),
                     ..Default::default()
                 },
                 &point.text,
@@ -327,8 +336,13 @@ async fn main() {
                     .apply(
                         &client,
                         MessageCreateParams {
-                            max_tokens: 4096,
-                            model: model.clone(),
+                            max_tokens: options.max_tokens,
+                            model: options.model.clone(),
+                            thinking: options.thinking,
+                            output_config: policyai::data::output_config_for_thinking(
+                                options.thinking,
+                                options.effort,
+                            ),
                             ..Default::default()
                         },
                         &point.text,
@@ -370,24 +384,43 @@ async fn main() {
     }
 }
 
-fn parse_args() -> (Model, Vec<String>) {
-    let mut model = DEFAULT_MODEL;
-    let mut files = Vec::new();
-    let mut args = std::env::args().skip(1);
-    while let Some(arg) = args.next() {
-        if arg == "--model" {
-            let Some(value) = args.next() else {
-                eprintln!("--model requires a value");
-                std::process::exit(2);
-            };
-            model = value.parse::<Model>().unwrap();
-        } else if let Some(value) = arg.strip_prefix("--model=") {
-            model = value.parse::<Model>().unwrap();
-        } else {
-            files.push(arg);
+#[derive(Clone, Default, Debug, Eq, PartialEq, arrrg_derive::CommandLine)]
+struct CliOptions {
+    #[arrrg(optional, "Anthropic model to use for evaluation.")]
+    model: Option<String>,
+    #[arrrg(optional, "Maximum output tokens for each request.")]
+    max_tokens: Option<u32>,
+    #[arrrg(optional, "Thinking config: adaptive, disabled, or a token budget.")]
+    thinking: Option<ThinkingArg>,
+    #[arrrg(optional, "Adaptive thinking effort: low, medium, or high.")]
+    effort: Option<EffortArg>,
+}
+
+struct RuntimeOptions {
+    model: Model,
+    max_tokens: u32,
+    thinking: Option<ThinkingConfig>,
+    effort: Option<Effort>,
+}
+
+impl From<CliOptions> for RuntimeOptions {
+    fn from(options: CliOptions) -> Self {
+        Self {
+            model: options
+                .model
+                .as_deref()
+                .map(|model| model.parse::<Model>().unwrap())
+                .unwrap_or(DEFAULT_MODEL),
+            max_tokens: options.max_tokens.unwrap_or(4096),
+            thinking: Some(
+                options
+                    .thinking
+                    .map(Into::into)
+                    .unwrap_or_else(ThinkingConfig::adaptive),
+            ),
+            effort: Some(options.effort.map(Into::into).unwrap_or(Effort::High)),
         }
     }
-    (model, files)
 }
 
 #[cfg(test)]
