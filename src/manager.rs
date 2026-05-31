@@ -6,7 +6,7 @@ use claudius::{
     ToolResultBlock,
 };
 
-use crate::{ApplyError, Policy, Report, ReportBuilder, Usage};
+use crate::{ApplyError, Policy, PolicyError, Report, ReportBuilder, Usage};
 
 /// Selects how PolicyAI requests structured output from the model.
 ///
@@ -51,7 +51,7 @@ impl InferenceConfig {
 /// #     prompt: "Test policy".to_string(),
 /// #     action: serde_json::json!({}),
 /// # };
-/// manager.add(policy)?;
+/// manager.add(policy);
 ///
 /// # let template = MessageCreateParams {
 /// #     max_tokens: 1024,
@@ -97,17 +97,27 @@ impl Manager {
 
     /// Add a policy to the manager.
     ///
+    /// # Panics
+    ///
+    /// Panics if the policy type doesn't match existing policies in the manager.
+    pub fn add(&mut self, policy: Policy) {
+        self.try_add(policy)
+            .expect("policy type doesn't match existing policies");
+    }
+
+    /// Add a policy to the manager.
+    ///
     /// # Errors
     ///
-    /// Returns [`PolicyError::PolicyTypeMismatch`] if the policy type does not
-    /// match the policies already in the manager.
+    /// Returns [`PolicyError::PolicyTypeMismatch`] if the policy type doesn't
+    /// match existing policies in the manager.
     #[allow(clippy::result_large_err)]
-    pub fn add(&mut self, policy: Policy) -> Result<(), crate::PolicyError> {
+    pub fn try_add(&mut self, policy: Policy) -> Result<(), PolicyError> {
         if let Some(last) = self.policies.last() {
             if last.r#type != policy.r#type {
-                return Err(crate::PolicyError::PolicyTypeMismatch {
-                    expected: last.r#type.to_string(),
-                    found: policy.r#type.to_string(),
+                return Err(PolicyError::PolicyTypeMismatch {
+                    expected: Box::new(last.r#type.clone()),
+                    actual: Box::new(policy.r#type),
                 });
             }
         }
@@ -547,7 +557,7 @@ mod tests {
             serde_json::json!({"is_active": true}),
         );
 
-        manager.add(policy).unwrap();
+        manager.add(policy);
         assert!(!manager.is_empty());
         assert_eq!(manager.len(), 1);
     }
@@ -573,15 +583,15 @@ mod tests {
             serde_json::json!({"count": 42}),
         );
 
-        manager.add(policy1).unwrap();
-        manager.add(policy2).unwrap();
-        manager.add(policy3).unwrap();
+        manager.add(policy1);
+        manager.add(policy2);
+        manager.add(policy3);
 
         assert_eq!(manager.len(), 3);
     }
 
     #[test]
-    fn manager_add_policy_different_type_returns_error() {
+    fn manager_try_add_policy_different_type_returns_error() {
         let mut manager = Manager::default();
 
         let type1 = create_test_policy_type();
@@ -597,8 +607,8 @@ mod tests {
         let policy1 = create_test_policy(type1, "first", serde_json::json!({"is_active": true}));
         let policy2 = create_test_policy(type2, "second", serde_json::json!({"enabled": false}));
 
-        manager.add(policy1).unwrap();
-        let err = manager.add(policy2).unwrap_err();
+        manager.add(policy1);
+        let err = manager.try_add(policy2).unwrap_err();
         assert!(matches!(err, crate::PolicyError::PolicyTypeMismatch { .. }));
     }
 
@@ -691,8 +701,8 @@ mod tests {
             serde_json::json!({"message": "greeting"}),
         );
 
-        manager.add(policy1).unwrap();
-        manager.add(policy2).unwrap();
+        manager.add(policy1);
+        manager.add(policy2);
 
         let template = MessageCreateParams::default();
         let text = "urgent hello world";

@@ -45,6 +45,9 @@ pub mod data;
 /// Analysis tools for evaluation metrics
 pub mod analysis;
 
+/// Compiler for line-oriented policy declarations
+pub mod compiler;
+
 mod errors;
 mod field;
 mod manager;
@@ -421,7 +424,7 @@ mod tests {
             policy.action
         );
         let mut manager = Manager::default();
-        manager.add(policy).unwrap();
+        manager.add(policy);
         let report = manager
             .apply(
                 &client,
