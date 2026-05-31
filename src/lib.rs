@@ -65,7 +65,7 @@ pub use on_conflict::OnConflict;
 pub use parser::ParseError;
 pub use policy::Policy;
 pub use policy_type::PolicyType;
-pub use report::Report;
+pub use report::{FieldStats, Report};
 pub use report_builder::ReportBuilder;
 pub use usage::Usage;
 

@@ -1,9 +1,49 @@
+use std::collections::HashMap;
+
 use claudius::MessageParam;
 
 use crate::{
     number_is_equal, number_less_than, BoolMask, Conflict, NumberMask, OnConflict, PolicyError,
     StringArrayMask, StringEnumMask, StringMask,
 };
+
+/// Statistics for a single field in a report.
+///
+/// Tracks how many times a field was set and the distribution of values
+/// that were reported for that field.
+#[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
+pub struct FieldStats {
+    /// The number of times this field was set.
+    pub count: usize,
+    /// Distribution of values as a histogram (value -> count).
+    pub distribution: HashMap<String, usize>,
+}
+
+impl FieldStats {
+    /// Record a value being set for this field.
+    pub fn record(&mut self, value: &serde_json::Value) {
+        self.count += 1;
+        let key = match value {
+            serde_json::Value::Null => "null".to_string(),
+            serde_json::Value::Bool(b) => b.to_string(),
+            serde_json::Value::Number(n) => n.to_string(),
+            serde_json::Value::String(s) => s.clone(),
+            serde_json::Value::Array(arr) => {
+                format!("[{}]", arr.len())
+            }
+            serde_json::Value::Object(obj) => {
+                format!("{{{}}}", obj.len())
+            }
+        };
+        *self.distribution.entry(key).or_insert(0) += 1;
+    }
+
+    /// Record an array element being added to a field.
+    pub fn record_array_element(&mut self, value: &str) {
+        self.count += 1;
+        *self.distribution.entry(value.to_string()).or_insert(0) += 1;
+    }
+}
 
 /// Contains the result of applying policies to unstructured data.
 ///
@@ -35,6 +75,7 @@ pub struct Report {
     value: Option<serde_json::Value>,
     errors: Vec<PolicyError>,
     conflicts: Vec<Conflict>,
+    field_stats: HashMap<String, FieldStats>,
 }
 
 impl Report {
@@ -80,6 +121,7 @@ impl Report {
             value: None,
             errors: vec![],
             conflicts: vec![],
+            field_stats: HashMap::new(),
         }
     }
 
@@ -141,6 +183,48 @@ impl Report {
     /// ```
     pub fn conflicts(&self) -> &[Conflict] {
         &self.conflicts
+    }
+
+    /// Get the statistics for a specific field.
+    ///
+    /// Returns the FieldStats for the given field name, or None if no values
+    /// were reported for that field.
+    ///
+    /// # Arguments
+    ///
+    /// * `field` - The name of the field to get statistics for
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use policyai::{Report, OnConflict};
+    /// # use claudius::MessageParam;
+    /// let mut report = Report::new(vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
+    /// report.report_bool(1, "active", true, OnConflict::Default);
+    /// let stats = report.field_stats("active").unwrap();
+    /// assert_eq!(stats.count, 1);
+    /// ```
+    pub fn field_stats(&self, field: &str) -> Option<&FieldStats> {
+        self.field_stats.get(field)
+    }
+
+    /// Get statistics for all fields.
+    ///
+    /// Returns a reference to the HashMap containing statistics for all fields
+    /// that had values reported during policy application.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use policyai::{Report, OnConflict};
+    /// # use claudius::MessageParam;
+    /// let mut report = Report::new(vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
+    /// report.report_bool(1, "active", true, OnConflict::Default);
+    /// let all_stats = report.all_field_stats();
+    /// assert!(all_stats.contains_key("active"));
+    /// ```
+    pub fn all_field_stats(&self) -> &HashMap<String, FieldStats> {
+        &self.field_stats
     }
 
     /// Check if the report contains any errors or conflicts.
@@ -225,6 +309,10 @@ impl Report {
         on_conflict: OnConflict,
     ) {
         self.report_policy_index(policy_index);
+        self.field_stats
+            .entry(field.to_string())
+            .or_default()
+            .record(&serde_json::Value::Bool(value));
         let build = self.value.get_or_insert_with(|| {
             serde_json::json! {{}}
         });
@@ -344,6 +432,10 @@ impl Report {
     ) {
         self.report_policy_index(policy_index);
         let value = value.into();
+        self.field_stats
+            .entry(field.to_string())
+            .or_default()
+            .record(&serde_json::Value::Number(value.clone()));
 
         let mut conflict_to_report = None;
         let mut error_to_report = None;
@@ -464,6 +556,10 @@ impl Report {
         on_conflict: OnConflict,
     ) {
         self.report_policy_index(policy_index);
+        self.field_stats
+            .entry(field.to_string())
+            .or_default()
+            .record(&serde_json::Value::String(value.clone()));
 
         let mut conflict_to_report = None;
         let mut error_to_report = None;
@@ -543,6 +639,10 @@ impl Report {
         on_conflict: OnConflict,
     ) {
         self.report_policy_index(policy_index);
+        self.field_stats
+            .entry(field.to_string())
+            .or_default()
+            .record(&serde_json::Value::String(value.clone()));
         let build = self.value.get_or_insert_with(|| {
             serde_json::json! {{}}
         });
@@ -620,6 +720,10 @@ impl Report {
     /// ```
     pub fn report_string_array(&mut self, policy_index: usize, field: &str, value: String) {
         self.report_policy_index(policy_index);
+        self.field_stats
+            .entry(field.to_string())
+            .or_default()
+            .record_array_element(&value);
         let build = self.value.get_or_insert_with(|| {
             serde_json::json! {{}}
         });
@@ -803,5 +907,189 @@ impl std::fmt::Display for Report {
 impl std::fmt::Debug for Report {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
         f.debug_struct("Report").finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn field_stats_record_bool() {
+        let mut stats = FieldStats::default();
+        stats.record(&serde_json::Value::Bool(true));
+        stats.record(&serde_json::Value::Bool(true));
+        stats.record(&serde_json::Value::Bool(false));
+
+        assert_eq!(stats.count, 3);
+        assert_eq!(stats.distribution.get("true"), Some(&2));
+        assert_eq!(stats.distribution.get("false"), Some(&1));
+        // Debug output for future inspection
+        println!(
+            "field_stats_record_bool: count={}, distribution={:?}",
+            stats.count, stats.distribution
+        );
+    }
+
+    #[test]
+    fn field_stats_record_number() {
+        let mut stats = FieldStats::default();
+        stats.record(&serde_json::json!(42));
+        stats.record(&serde_json::json!(42));
+        stats.record(&serde_json::json!(100));
+
+        assert_eq!(stats.count, 3);
+        assert_eq!(stats.distribution.get("42"), Some(&2));
+        assert_eq!(stats.distribution.get("100"), Some(&1));
+        println!(
+            "field_stats_record_number: count={}, distribution={:?}",
+            stats.count, stats.distribution
+        );
+    }
+
+    #[test]
+    fn field_stats_record_string() {
+        let mut stats = FieldStats::default();
+        stats.record(&serde_json::json!("high"));
+        stats.record(&serde_json::json!("low"));
+        stats.record(&serde_json::json!("high"));
+
+        assert_eq!(stats.count, 3);
+        assert_eq!(stats.distribution.get("high"), Some(&2));
+        assert_eq!(stats.distribution.get("low"), Some(&1));
+        println!(
+            "field_stats_record_string: count={}, distribution={:?}",
+            stats.count, stats.distribution
+        );
+    }
+
+    #[test]
+    fn field_stats_record_array_element() {
+        let mut stats = FieldStats::default();
+        stats.record_array_element("tag1");
+        stats.record_array_element("tag2");
+        stats.record_array_element("tag1");
+
+        assert_eq!(stats.count, 3);
+        assert_eq!(stats.distribution.get("tag1"), Some(&2));
+        assert_eq!(stats.distribution.get("tag2"), Some(&1));
+        println!(
+            "field_stats_record_array_element: count={}, distribution={:?}",
+            stats.count, stats.distribution
+        );
+    }
+
+    #[test]
+    fn report_tracks_bool_stats() {
+        let mut report = Report::new(vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
+        report.report_bool(1, "active", true, OnConflict::Default);
+        report.report_bool(2, "active", true, OnConflict::Default);
+        report.report_bool(3, "active", false, OnConflict::Default);
+
+        let stats = report
+            .field_stats("active")
+            .expect("active field should have stats");
+        assert_eq!(stats.count, 3);
+        assert_eq!(stats.distribution.get("true"), Some(&2));
+        assert_eq!(stats.distribution.get("false"), Some(&1));
+        println!(
+            "report_tracks_bool_stats: count={}, distribution={:?}",
+            stats.count, stats.distribution
+        );
+    }
+
+    #[test]
+    fn report_tracks_number_stats() {
+        let mut report = Report::new(vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
+        report.report_number(1, "score", 10, OnConflict::Default);
+        report.report_number(2, "score", 20, OnConflict::Default);
+        report.report_number(3, "score", 10, OnConflict::Default);
+
+        let stats = report
+            .field_stats("score")
+            .expect("score field should have stats");
+        assert_eq!(stats.count, 3);
+        assert_eq!(stats.distribution.get("10"), Some(&2));
+        assert_eq!(stats.distribution.get("20"), Some(&1));
+        println!(
+            "report_tracks_number_stats: count={}, distribution={:?}",
+            stats.count, stats.distribution
+        );
+    }
+
+    #[test]
+    fn report_tracks_string_stats() {
+        let mut report = Report::new(vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
+        report.report_string(1, "title", "Hello".to_string(), OnConflict::Default);
+        report.report_string(2, "title", "World".to_string(), OnConflict::Default);
+
+        let stats = report
+            .field_stats("title")
+            .expect("title field should have stats");
+        assert_eq!(stats.count, 2);
+        assert_eq!(stats.distribution.get("Hello"), Some(&1));
+        assert_eq!(stats.distribution.get("World"), Some(&1));
+        println!(
+            "report_tracks_string_stats: count={}, distribution={:?}",
+            stats.count, stats.distribution
+        );
+    }
+
+    #[test]
+    fn report_tracks_string_enum_stats() {
+        let mut report = Report::new(vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
+        report.report_string_enum(1, "priority", "high".to_string(), OnConflict::Default);
+        report.report_string_enum(2, "priority", "low".to_string(), OnConflict::Default);
+        report.report_string_enum(3, "priority", "high".to_string(), OnConflict::Default);
+
+        let stats = report
+            .field_stats("priority")
+            .expect("priority field should have stats");
+        assert_eq!(stats.count, 3);
+        assert_eq!(stats.distribution.get("high"), Some(&2));
+        assert_eq!(stats.distribution.get("low"), Some(&1));
+        println!(
+            "report_tracks_string_enum_stats: count={}, distribution={:?}",
+            stats.count, stats.distribution
+        );
+    }
+
+    #[test]
+    fn report_tracks_string_array_stats() {
+        let mut report = Report::new(vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
+        report.report_string_array(1, "tags", "urgent".to_string());
+        report.report_string_array(2, "tags", "important".to_string());
+        report.report_string_array(3, "tags", "urgent".to_string());
+
+        let stats = report
+            .field_stats("tags")
+            .expect("tags field should have stats");
+        assert_eq!(stats.count, 3);
+        assert_eq!(stats.distribution.get("urgent"), Some(&2));
+        assert_eq!(stats.distribution.get("important"), Some(&1));
+        println!(
+            "report_tracks_string_array_stats: count={}, distribution={:?}",
+            stats.count, stats.distribution
+        );
+    }
+
+    #[test]
+    fn report_all_field_stats() {
+        let mut report = Report::new(vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
+        report.report_bool(1, "active", true, OnConflict::Default);
+        report.report_number(2, "score", 42, OnConflict::Default);
+
+        let all_stats = report.all_field_stats();
+        assert!(all_stats.contains_key("active"));
+        assert!(all_stats.contains_key("score"));
+        assert_eq!(all_stats.len(), 2);
+        println!("report_all_field_stats: {:?}", all_stats);
+    }
+
+    #[test]
+    fn report_field_stats_none_for_unreported() {
+        let report = Report::new(vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
+        assert!(report.field_stats("nonexistent").is_none());
+        println!("report_field_stats_none_for_unreported: field_stats returned None as expected");
     }
 }
