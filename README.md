@@ -403,3 +403,48 @@ Issues and pull requests welcome at https://github.com/rescrv/policyai
 ## License
 
 Apache-2.0
+
+## Python bindings feature flags
+
+Python bindings are available through non-default Cargo features so the normal Rust library build does not depend on PyO3.
+
+- `python`: Enables the PyO3 binding code and optional `pyo3` dependency without forcing Python extension-module linker behavior. Use this for Rust-side development and tests, for example `cargo test --features python`.
+- `python-extension`: Enables `python` plus `pyo3/extension-module`. Use this when building the importable Python extension with maturin, for example `maturin develop` or `maturin build`.
+
+`pyproject.toml` selects `python-extension` for maturin builds. The split keeps ordinary Rust tests linkable while still producing the correct Python extension artifact for packaging.
+
+## Building the Python extension
+
+PolicyAI uses maturin to build the Python extension.
+
+### Development install
+
+From the repository root:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip maturin
+maturin develop
+```
+
+This builds the extension with the `python-extension` feature selected by `pyproject.toml` and installs it into the active virtual environment.
+
+### Build a wheel
+
+```bash
+python -m pip install --upgrade maturin
+maturin build --release
+```
+
+The wheel will be written under `target/wheels/`.
+
+### Rust-side binding tests
+
+Use the lighter `python` feature for ordinary Rust tests:
+
+```bash
+cargo test --features python
+```
+
+Do not use `python-extension` for normal Rust tests unless you specifically need Python extension-module linker behavior.

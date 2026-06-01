@@ -1,0 +1,25 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "policyai"
+version = "0.4.0"
+description = "Composable, conflict-aware policies for reliable agents"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "Robert Escriva", email = "robert@rescrv.net" },
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+]
+
+[tool.maturin]
+bindings = "pyo3"
+features = ["python-extension"]
+module-name = "policyai"
