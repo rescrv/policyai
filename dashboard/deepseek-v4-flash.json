@@ -1,0 +1,66 @@
+{
+  "summary": {
+    "total_reports": 300,
+    "policyai": {
+      "avg_fields_matched": 2.5366666666666666,
+      "total_matched_field_values": 761,
+      "total_wrong_values": 8,
+      "total_missing_fields": 32,
+      "total_missing_field_values": 32,
+      "total_extra_fields": 31,
+      "total_extra_field_values": 31,
+      "total_not_expected_not_output_field_values": 0,
+      "error_rate": 0.03,
+      "avg_duration_ms": 6296.873333333333
+    },
+    "baseline": {
+      "avg_fields_matched": 2.04,
+      "total_matched_field_values": 612,
+      "total_wrong_values": 2,
+      "total_missing_fields": 58,
+      "total_missing_field_values": 58,
+      "total_extra_fields": 2,
+      "total_extra_field_values": 2,
+      "total_not_expected_not_output_field_values": 0,
+      "error_rate": 0.14666666666666667,
+      "avg_duration_ms": 4726.503333333333
+    },
+    "comparison": {
+      "fields_matched_improvement": 0.4966666666666666,
+      "speed_ratio": 0.7506111498722646,
+      "error_rate_difference": -0.11666666666666667
+    },
+    "field_match_accuracy": {
+      "expected_vs_control": {
+        "source": "baseline",
+        "confusion_matrix": {
+          "true_positive": 612,
+          "false_positive": 2,
+          "true_negative": 0,
+          "false_negative": 58
+        },
+        "metrics": {
+          "precision": 0.996742671009772,
+          "recall": 0.9134328358208955,
+          "f1_score": 0.9532710280373832,
+          "accuracy": 0.9107142857142857
+        }
+      },
+      "expected_vs_experimental": {
+        "source": "output",
+        "confusion_matrix": {
+          "true_positive": 761,
+          "false_positive": 31,
+          "true_negative": 0,
+          "false_negative": 32
+        },
+        "metrics": {
+          "precision": 0.9608585858585859,
+          "recall": 0.9596469104665826,
+          "f1_score": 0.9602523659305994,
+          "accuracy": 0.9235436893203883
+        }
+      }
+    }
+  }
+}
