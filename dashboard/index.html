@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PolicyAI Experiment Results</title>
+<style>
+/* ── reset & base ───────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background: #f5f6f8;
+  color: #1d1d1f;
+  line-height: 1.5;
+  padding: 2rem;
+}
+
+/* ── layout ─────────────────────────────────────────────── */
+.container   { max-width: 860px; margin: 0 auto; }
+h1           { font-size: 1.4rem; font-weight: 600; margin-bottom: 1.2rem; }
+h2           { font-size: 1.1rem; font-weight: 600; margin-bottom: .6rem; color: #444; }
+.subhead     { font-size: .85rem; color: #666; margin-bottom: 1.6rem; }
+
+/* ── model picker ───────────────────────────────────────── */
+.picker {
+  display: flex; flex-wrap: wrap; gap: .5rem;
+  margin-bottom: 1.8rem;
+}
+.picker button {
+  padding: .45rem 1rem;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  background: #fff;
+  font-size: .85rem;
+  cursor: pointer;
+  transition: all .15s;
+}
+.picker button:hover           { border-color: #888; }
+.picker button.active          { background: #1d1d1f; color: #fff; border-color: #1d1d1f; }
+
+/* ── cards ──────────────────────────────────────────────── */
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 1rem;
+  margin-bottom: 2rem;
+}
+.card {
+  background: #fff;
+  border-radius: 10px;
+  padding: 1.2rem;
+  box-shadow: 0 1px 3px rgba(0,0,0,.08);
+}
+.card .label  { font-size: .75rem; text-transform: uppercase; letter-spacing: .04em; color: #888; }
+.card .value  { font-size: 1.6rem; font-weight: 700; margin-top: .15rem; }
+.card .value.good  { color: #1a7f37; }
+.card .value.warn  { color: #b35900; }
+.card .value.bad   { color: #cf222e; }
+
+/* ── section ────────────────────────────────────────────── */
+.section      { margin-bottom: 2rem; }
+
+/* ── table ──────────────────────────────────────────────── */
+table         { width: 100%; border-collapse: collapse; background: #fff;
+                border-radius: 10px; overflow: hidden;
+                box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+th, td        { text-align: left; padding: .6rem 1rem; font-size: .85rem; }
+th            { background: #fafafa; font-weight: 600; color: #555; border-bottom: 1px solid #eee; }
+td            { border-bottom: 1px solid #f0f0f0; }
+tr:last-child td { border-bottom: none; }
+
+/* ── bar chart ──────────────────────────────────────────── */
+.bar-group        { margin-bottom: .6rem; }
+.bar-label        { font-size: .8rem; color: #555; margin-bottom: .2rem; }
+.bar-track        { height: 22px; background: #eee; border-radius: 4px; position: relative; overflow: hidden; }
+.bar-fill         { height: 100%; border-radius: 4px; transition: width .4s ease; }
+.bar-fill.blue    { background: #3b82f6; }
+.bar-fill.green   { background: #22c55e; }
+.bar-value        { position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+                    font-size: .7rem; font-weight: 600; color: #333; }
+
+/* ── placeholder ────────────────────────────────────────── */
+#placeholder {
+  text-align: center; padding: 4rem 1rem; color: #999;
+  font-size: .95rem;
+}
+
+/* ── hidden ─────────────────────────────────────────────── */
+.hidden { display: none; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>PolicyAI — Experiment Results</h1>
+  <p class="subhead">Select a model to view its benchmark data.</p>
+
+  <div class="picker" id="picker"></div>
+
+  <div id="placeholder">← Pick a model to get started</div>
+  <div id="dashboard" class="hidden">
+
+    <!-- top-level numbers -->
+    <div class="section">
+      <h2>Overview</h2>
+      <div class="cards" id="overview-cards"></div>
+    </div>
+
+    <!-- policyai vs baseline comparison bars -->
+    <div class="section">
+      <h2>Accuracy — Baseline vs PolicyAI</h2>
+      <div id="accuracy-bars"></div>
+    </div>
+
+    <!-- confusion matrices side-by-side -->
+    <div class="section">
+      <h2>Confusion Matrices</h2>
+      <div class="cards" style="grid-template-columns: 1fr 1fr;">
+        <div class="card">
+          <div class="label" style="margin-bottom:.5rem">Baseline (control)</div>
+          <table id="cm-baseline"></table>
+        </div>
+        <div class="card">
+          <div class="label" style="margin-bottom:.5rem">PolicyAI (experimental)</div>
+          <table id="cm-experimental"></table>
+        </div>
+      </div>
+    </div>
+
+    <!-- detailed metrics table -->
+    <div class="section">
+      <h2>Detailed Metrics</h2>
+      <table id="detail-table"></table>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ================================================================
+   CONFIG — add model slugs here; each must have a matching
+   <slug>.json in the same directory (or DATA_DIR).
+   ================================================================ */
+var MODELS = [
+    "deepseek-v4-flash",
+    "deepseek-v4-pro",
+    "gpt-oss-120b",
+    "gpt-oss-20b",
+    "kimi-k2p6",
+    "minimax-m2p7",
+    "opus-4-8"
+];
+
+var DATA_DIR = ".";   // relative to index.html
+
+/* ── helpers ───────────────────────────────────────────────────── */
+function $(sel) { return document.querySelector(sel); }
+function pct(n) { return (n * 100).toFixed(1) + "%"; }
+function ms(n)  { return (n / 1000).toFixed(1) + " s"; }
+function fmt(n) { return typeof n === "number" ? (Number.isInteger(n) ? n.toString() : n.toFixed(2)) : n; }
+
+function makeBar(label, val, max, cls) {
+  var w = Math.min(100, (val / max) * 100);
+  return '<div class="bar-group">' +
+    '<div class="bar-label">' + label + '</div>' +
+    '<div class="bar-track"><div class="bar-fill ' + cls + '" style="width:' + w.toFixed(1) + '%"></div>' +
+    '<span class="bar-value">' + pct(val) + '</span></div></div>';
+}
+
+function cmTable(cm) {
+  return '<thead><tr><th></th><th>Pred +</th><th>Pred −</th></tr></thead>' +
+    '<tbody>' +
+    '<tr><td><strong>Actual +</strong></td><td>' + cm.true_positive + '</td><td>' + cm.false_negative + '</td></tr>' +
+    '<tr><td><strong>Actual −</strong></td><td>' + cm.false_positive + '</td><td>' + cm.true_negative + '</td></tr>' +
+    '</tbody>';
+}
+
+/* ── picker ─────────────────────────────────────────────────────── */
+var pickerEl = $("#picker");
+MODELS.forEach(function(slug) {
+  var btn = document.createElement("button");
+  btn.textContent = slug;
+  btn.addEventListener("click", function() { selectModel(slug); });
+  pickerEl.appendChild(btn);
+});
+
+var activeBtn = null;
+function selectModel(slug) {
+  // highlight button
+  if (activeBtn) activeBtn.classList.remove("active");
+  var btns = pickerEl.querySelectorAll("button");
+  for (var i = 0; i < btns.length; i++) {
+    if (btns[i].textContent === slug) { activeBtn = btns[i]; break; }
+  }
+  activeBtn.classList.add("active");
+
+  // fetch
+  fetch(DATA_DIR + "/" + slug + ".json")
+    .then(function(r) { return r.json(); })
+    .then(function(data) { render(data.summary); })
+    .catch(function(err) {
+      $("#placeholder").textContent = "Failed to load " + slug + ".json — " + err;
+      $("#placeholder").classList.remove("hidden");
+      $("#dashboard").classList.add("hidden");
+    });
+}
+
+/* ── render ─────────────────────────────────────────────────────── */
+function render(s) {
+  $("#placeholder").classList.add("hidden");
+  $("#dashboard").classList.remove("hidden");
+
+  var p = s.policyai;
+  var b = s.baseline;
+  var c = s.comparison;
+  var fma = s.field_match_accuracy;
+
+  // overview cards
+  var expM  = fma.expected_vs_experimental.metrics;
+  var ctrlM = fma.expected_vs_control.metrics;
+
+  var cards = [
+    { label: "Reports",          value: s.total_reports },
+    { label: "PolicyAI F1",      value: pct(expM.f1_score),  cls: expM.f1_score > 0.95 ? "good" : expM.f1_score > 0.8 ? "warn" : "bad" },
+    { label: "Baseline F1",      value: pct(ctrlM.f1_score), cls: ctrlM.f1_score > 0.95 ? "good" : ctrlM.f1_score > 0.8 ? "warn" : "bad" },
+    { label: "Avg Fields Δ",     value: "+" + c.fields_matched_improvement.toFixed(2), cls: "good" },
+    { label: "PolicyAI Latency", value: ms(p.avg_duration_ms) },
+    { label: "Baseline Latency", value: ms(b.avg_duration_ms) },
+  ];
+
+  var html = "";
+  cards.forEach(function(c) {
+    html += '<div class="card"><div class="label">' + c.label + '</div>' +
+            '<div class="value' + (c.cls ? " " + c.cls : "") + '">' + c.value + '</div></div>';
+  });
+  $("#overview-cards").innerHTML = html;
+
+  // accuracy bars
+  html = "";
+  html += makeBar("Baseline Precision",  ctrlM.precision, 1, "blue");
+  html += makeBar("PolicyAI Precision",   expM.precision,  1, "green");
+  html += makeBar("Baseline Recall",      ctrlM.recall,    1, "blue");
+  html += makeBar("PolicyAI Recall",       expM.recall,     1, "green");
+  html += makeBar("Baseline F1",          ctrlM.f1_score,  1, "blue");
+  html += makeBar("PolicyAI F1",           expM.f1_score,   1, "green");
+  $("#accuracy-bars").innerHTML = html;
+
+  // confusion matrices
+  $("#cm-baseline").innerHTML     = cmTable(fma.expected_vs_control.confusion_matrix);
+  $("#cm-experimental").innerHTML = cmTable(fma.expected_vs_experimental.confusion_matrix);
+
+  // detail table
+  var rows = [
+    ["", "Baseline", "PolicyAI"],
+    ["Avg Fields Matched",     fmt(b.avg_fields_matched),       fmt(p.avg_fields_matched)],
+    ["Total Matched Values",   b.total_matched_field_values,    p.total_matched_field_values],
+    ["Wrong Values",           b.total_wrong_values,            p.total_wrong_values],
+    ["Missing Fields",         b.total_missing_fields,          p.total_missing_fields],
+    ["Missing Field Values",   b.total_missing_field_values,    p.total_missing_field_values],
+    ["Extra Fields",           b.total_extra_fields,            p.total_extra_fields],
+    ["Extra Field Values",     b.total_extra_field_values,      p.total_extra_field_values],
+    ["Error Rate",             pct(b.error_rate),               pct(p.error_rate)],
+    ["Avg Duration",           ms(b.avg_duration_ms),           ms(p.avg_duration_ms)],
+  ];
+  html = "<thead><tr>";
+  rows[0].forEach(function(h) { html += "<th>" + h + "</th>"; });
+  html += "</tr></thead><tbody>";
+  for (var i = 1; i < rows.length; i++) {
+    html += "<tr>";
+    rows[i].forEach(function(v, j) {
+      html += j === 0 ? "<td><strong>" + v + "</strong></td>" : "<td>" + v + "</td>";
+    });
+    html += "</tr>";
+  }
+  html += "</tbody>";
+  $("#detail-table").innerHTML = html;
+}
+</script>
+</body>
+</html>
