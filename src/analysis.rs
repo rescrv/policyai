@@ -18,7 +18,7 @@
 /// assert_eq!(matrix.precision(), 0.5); // 1 TP / (1 TP + 1 FP)
 /// assert_eq!(matrix.recall(), 0.5);    // 1 TP / (1 TP + 1 FN)
 /// ```
-#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ConfusionMatrix {
     /// Count of correctly predicted positive cases (actual=true, predicted=true).
     pub true_positive: usize,
