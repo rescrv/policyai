@@ -57,6 +57,8 @@ mod on_conflict;
 mod parser;
 mod policy;
 mod policy_type;
+#[cfg(feature = "python")]
+mod python;
 mod report;
 mod report_builder;
 mod usage;

@@ -7,12 +7,21 @@ description = "PolicyAI provides a mechanism for unstructured, composable polici
 license = "Apache-2.0"
 repository = "https://github.com/rescrv/policyai"
 
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[features]
+default = []
+python = ["dep:pyo3"]
+python-extension = ["python", "pyo3/extension-module"]
+
 [dependencies]
 arrrg = "0.10.0"
 arrrg_derive = "0.10.0"
 claudius = "0.31.0"
 getopts = "0.2.24"
 guacamole = "0.16.0"
+pyo3 = { version = "0.23", optional = true }
 serde = "1.0.228"
 serde_json = { version = "1.0.150", features = ["preserve_order"] }
 tokio = { version = "1.52.3", features = ["rt", "macros"] }
